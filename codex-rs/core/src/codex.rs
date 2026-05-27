@@ -616,6 +616,7 @@ impl Codex {
         let session_configuration = SessionConfiguration {
             provider: config.model_provider.clone(),
             collaboration_mode,
+            requested_model: model.clone(),
             model_reasoning_summary: config.model_reasoning_summary,
             service_tier: config.service_tier,
             developer_instructions: config.developer_instructions.clone(),
@@ -847,6 +848,7 @@ pub(crate) struct TurnContext {
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) model_info: ModelInfo,
+    pub(crate) requested_model: String,
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) provider: ModelProviderInfo,
     pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
@@ -959,6 +961,7 @@ impl TurnContext {
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
             model_info: model_info.clone(),
+            requested_model: model.clone(),
             session_telemetry: self
                 .session_telemetry
                 .clone()
@@ -1022,7 +1025,7 @@ impl TurnContext {
             approval_policy: self.approval_policy.value(),
             sandbox_policy: self.sandbox_policy.get().clone(),
             network: self.turn_context_network_item(),
-            model: self.model_info.slug.clone(),
+            model: self.requested_model.clone(),
             personality: self.personality,
             collaboration_mode: Some(self.collaboration_mode.clone()),
             realtime_active: Some(self.realtime_active),
@@ -1073,6 +1076,7 @@ pub(crate) struct SessionConfiguration {
     provider: ModelProviderInfo,
 
     collaboration_mode: CollaborationMode,
+    requested_model: String,
     model_reasoning_summary: Option<ReasoningSummaryConfig>,
     service_tier: Option<ServiceTier>,
 
@@ -1130,7 +1134,7 @@ impl SessionConfiguration {
 
     fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
-            model: self.collaboration_mode.model().to_string(),
+            model: self.requested_model.clone(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,
             approval_policy: self.approval_policy.value(),
@@ -1152,6 +1156,7 @@ impl SessionConfiguration {
                 &self.cwd,
             );
         if let Some(collaboration_mode) = updates.collaboration_mode.clone() {
+            next_configuration.requested_model = collaboration_mode.model().to_string();
             next_configuration.collaboration_mode = collaboration_mode;
         }
         if let Some(summary) = updates.reasoning_summary {
@@ -1411,7 +1416,7 @@ impl Session {
             .model_reasoning_summary
             .unwrap_or(model_info.default_reasoning_summary);
         let session_telemetry = session_telemetry.clone().with_model(
-            session_configuration.collaboration_mode.model(),
+            session_configuration.requested_model.as_str(),
             model_info.slug.as_str(),
         );
         let session_source = session_configuration.session_source.clone();
@@ -1456,6 +1461,7 @@ impl Session {
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
             model_info: model_info.clone(),
+            requested_model: session_configuration.requested_model.clone(),
             session_telemetry: session_telemetry_for_context,
             provider: provider_for_context,
             reasoning_effort,
@@ -1984,7 +1990,7 @@ impl Session {
                 session_id: conversation_id,
                 forked_from_id,
                 thread_name: session_configuration.thread_name.clone(),
-                model: session_configuration.collaboration_mode.model().to_string(),
+                model: session_configuration.requested_model.clone(),
                 model_provider_id: config.model_provider_id.clone(),
                 service_tier: session_configuration.service_tier,
                 approval_policy: session_configuration.approval_policy.value(),
@@ -2412,7 +2418,22 @@ impl Session {
                     .is_some_and(|model_provider_id| model_provider_id != previous_provider_id);
                 drop(state);
 
-                if provider_changed
+                if let Some(runtime_model) = self
+                    .resolve_runtime_model_for_github_copilot_auto(&updated)
+                    .await
+                {
+                    let requested_model = updated.requested_model.clone();
+                    updated.collaboration_mode =
+                        updated
+                            .collaboration_mode
+                            .with_updates(Some(runtime_model), None, None);
+                    updated.requested_model = requested_model;
+                    // The concrete model is announced from `new_turn_with_sub_id`
+                    // (i.e. once a UI client is subscribed to the thread), not
+                    // here: settings updates can run during session init before
+                    // any subscriber exists, so an emit here would be dropped and
+                    // would suppress the later, deliverable per-turn emit.
+                } else if provider_changed
                     && let Some(supported_model) = self
                         .resolve_supported_model_for_provider_change(&updated)
                         .await
@@ -2464,6 +2485,70 @@ impl Session {
                 Err(err)
             }
         }
+    }
+
+    async fn resolve_runtime_model_for_github_copilot_auto(
+        &self,
+        session_configuration: &SessionConfiguration,
+    ) -> Option<String> {
+        let config = Arc::clone(&session_configuration.original_config_do_not_use);
+        if config.model_provider_id != "github-copilot"
+            || session_configuration.collaboration_mode.model() != "auto"
+        {
+            return None;
+        }
+
+        let provider = session_configuration.provider.clone();
+        let models_manager = ModelsManager::new_with_provider(
+            config.codex_home.clone(),
+            Arc::clone(&self.services.auth_manager),
+            config.model_catalog.clone(),
+            CollaborationModesConfig::default(),
+            config.model_provider_id.clone(),
+            provider,
+        );
+
+        let available_models = models_manager
+            .list_models(RefreshStrategy::OnlineIfUncached)
+            .await;
+        available_models
+            .iter()
+            .find(|preset| preset.is_default)
+            .or_else(|| available_models.first())
+            .map(|preset| preset.model.clone())
+    }
+
+    /// Surface the concrete backend model that a provider auto-routing alias
+    /// (e.g. GitHub Copilot `auto`) resolved to. The Copilot `/responses` shim
+    /// never echoes a usable `ServerModel`, so the resolution is performed
+    /// client-side and announced here as a `ModelReroute` event. Emitted at most
+    /// once per resolved model so it is shown on session start and again only if
+    /// the resolution changes.
+    async fn announce_auto_model_resolution(
+        &self,
+        sub_id: &str,
+        requested_model: &str,
+        resolved_model: &str,
+    ) {
+        if resolved_model.eq_ignore_ascii_case(requested_model) {
+            return;
+        }
+        {
+            let mut state = self.state.lock().await;
+            if state.announced_auto_resolution() == Some(resolved_model) {
+                return;
+            }
+            state.set_announced_auto_resolution(Some(resolved_model.to_string()));
+        }
+        self.send_event_raw(Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::ModelReroute(ModelRerouteEvent {
+                from_model: requested_model.to_string(),
+                to_model: resolved_model.to_string(),
+                reason: ModelRerouteReason::AutoModelSelection,
+            }),
+        })
+        .await;
     }
 
     async fn resolve_supported_model_for_provider_change(
@@ -2552,7 +2637,18 @@ impl Session {
             }
         };
 
-        if provider_changed
+        if let Some(runtime_model) = self
+            .resolve_runtime_model_for_github_copilot_auto(&session_configuration)
+            .await
+        {
+            let requested_model = session_configuration.requested_model.clone();
+            session_configuration.collaboration_mode = session_configuration
+                .collaboration_mode
+                .with_updates(Some(runtime_model.clone()), None, None);
+            session_configuration.requested_model = requested_model.clone();
+            self.announce_auto_model_resolution(&sub_id, &requested_model, &runtime_model)
+                .await;
+        } else if provider_changed
             && let Some(supported_model) = self
                 .resolve_supported_model_for_provider_change(&session_configuration)
                 .await
@@ -3629,7 +3725,7 @@ impl Session {
         turn_context: &Arc<TurnContext>,
         server_model: String,
     ) -> bool {
-        let requested_model = turn_context.model_info.slug.clone();
+        let requested_model = turn_context.requested_model.clone();
         let server_model_normalized = server_model.to_ascii_lowercase();
         let requested_model_normalized = requested_model.to_ascii_lowercase();
         if server_model_normalized == requested_model_normalized {
@@ -3638,10 +3734,6 @@ impl Session {
         }
 
         warn!("server reported model {server_model} while requested model was {requested_model}");
-
-        let warning_message = format!(
-            "Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: {CYBER_VERIFY_URL} or learn more: {CYBER_SAFETY_URL}"
-        );
 
         self.send_event(
             turn_context,
@@ -3652,6 +3744,14 @@ impl Session {
             }),
         )
         .await;
+
+        if requested_model_normalized == "auto" {
+            return true;
+        }
+
+        let warning_message = format!(
+            "Your account was flagged for potentially high-risk cyber activity and this request was routed to gpt-5.2 as a fallback. To regain access to gpt-5.3-codex, apply for trusted access: {CYBER_VERIFY_URL} or learn more: {CYBER_SAFETY_URL}"
+        );
 
         self.send_event(
             turn_context,
@@ -5782,6 +5882,7 @@ async fn spawn_review_thread(
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
         model_info: model_info.clone(),
+        requested_model: parent_turn_context.requested_model.clone(),
         session_telemetry: session_telemetry_for_context,
         provider: provider_for_context,
         reasoning_effort,

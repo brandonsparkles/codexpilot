@@ -286,7 +286,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             ServerNotification::ModelRerouted(notification) => {
                 eprintln!(
                     "{} {} -> {}",
-                    "model rerouted:".style(self.yellow).style(self.bold),
+                    "resolved model:".style(self.yellow).style(self.bold),
                     notification.from_model,
                     notification.to_model
                 );

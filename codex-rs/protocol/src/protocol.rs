@@ -1856,6 +1856,9 @@ pub struct WarningEvent {
 #[ts(rename_all = "snake_case")]
 pub enum ModelRerouteReason {
     HighRiskCyberActivity,
+    /// The configured model is a provider auto-routing alias (e.g. GitHub
+    /// Copilot `auto`) that resolved to a concrete backend model.
+    AutoModelSelection,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

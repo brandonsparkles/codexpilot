@@ -39,6 +39,7 @@ use crate::exec_events::McpToolCallItem;
 use crate::exec_events::McpToolCallItemError;
 use crate::exec_events::McpToolCallItemResult;
 use crate::exec_events::McpToolCallStatus as ExecMcpToolCallStatus;
+use crate::exec_events::ModelResolvedEvent;
 use crate::exec_events::PatchApplyStatus as ExecPatchApplyStatus;
 use crate::exec_events::PatchChangeKind as ExecPatchChangeKind;
 use crate::exec_events::ReasoningItem;
@@ -476,16 +477,9 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ModelRerouted(notification) => {
-                events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
-                    item: ExecThreadItem {
-                        id: self.next_item_id(),
-                        details: ThreadItemDetails::Error(ErrorItem {
-                            message: format!(
-                                "model rerouted: {} -> {} ({:?})",
-                                notification.from_model, notification.to_model, notification.reason
-                            ),
-                        }),
-                    },
+                events.push(ThreadEvent::ModelResolved(ModelResolvedEvent {
+                    configured_model: notification.from_model,
+                    resolved_model: notification.to_model,
                 }));
                 CodexStatus::Running
             }

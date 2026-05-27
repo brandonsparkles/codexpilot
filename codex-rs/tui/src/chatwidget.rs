@@ -241,6 +241,9 @@ use tracing::debug;
 use tracing::warn;
 
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
+const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
+const GITHUB_COPILOT_AUTO_MODEL: &str = "auto";
+const GITHUB_COPILOT_AUTO_MODEL_LABEL: &str = "Auto";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
@@ -374,6 +377,7 @@ use chrono::Local;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::plan_tool::StepStatus;
 use codex_protocol::plan_tool::UpdatePlanArgs;
@@ -1623,6 +1627,18 @@ fn web_search_action_to_core(
 }
 
 impl ChatWidget {
+    fn is_github_copilot_auto_selection(provider_id: &str, model: &str) -> bool {
+        provider_id == GITHUB_COPILOT_PROVIDER_ID && model == GITHUB_COPILOT_AUTO_MODEL
+    }
+
+    fn model_ui_name(provider_id: &str, model: &str) -> String {
+        if Self::is_github_copilot_auto_selection(provider_id, model) {
+            GITHUB_COPILOT_AUTO_MODEL_LABEL.to_string()
+        } else {
+            model.to_string()
+        }
+    }
+
     /// Stores or overwrites the cached nickname and role for a collab agent thread.
     ///
     /// Called by `App::upsert_agent_picker_thread` and `App::replace_chat_widget` to keep the
@@ -4576,9 +4592,12 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
 
-        let model_override = model.as_deref();
+        let model_override = model.as_deref().filter(|model| {
+            !Self::is_github_copilot_auto_selection(&config.model_provider_id, model)
+        });
         let model_for_header = model
             .clone()
+            .map(|model| Self::model_ui_name(&config.model_provider_id, &model))
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
         let active_collaboration_mask =
             Self::initial_collaboration_mask(&config, model_catalog.as_ref(), model_override);
@@ -4598,8 +4617,11 @@ impl ChatWidget {
         };
 
         let active_cell = Some(Self::placeholder_session_header_cell(&config));
-        let header_model_label = if config.model_provider_id == "github-copilot" {
-            format!("{header_model} (copilot)")
+        let header_model_label = if config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID {
+            format!(
+                "{} (copilot)",
+                Self::model_ui_name(&config.model_provider_id, &header_model)
+            )
         } else {
             header_model.clone()
         };
@@ -6418,7 +6440,17 @@ impl ChatWidget {
                     /*force_reload*/ true,
                 ));
             }
-            ServerNotification::ModelRerouted(_) => {}
+            ServerNotification::ModelRerouted(notification) => {
+                if self.config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID
+                    && notification.from_model == GITHUB_COPILOT_AUTO_MODEL
+                {
+                    self.set_model(&notification.to_model);
+                    self.add_info_message(
+                        format!("Auto selected {} for this session.", notification.to_model),
+                        /*hint*/ None,
+                    );
+                }
+            }
             ServerNotification::DeprecationNotice(notification) => {
                 self.on_deprecation_notice(DeprecationNoticeEvent {
                     summary: notification.summary,
@@ -6863,7 +6895,17 @@ impl ChatWidget {
             }
             EventMsg::Warning(WarningEvent { message }) => self.on_warning(message),
             EventMsg::GuardianAssessment(ev) => self.on_guardian_assessment(ev),
-            EventMsg::ModelReroute(_) => {}
+            EventMsg::ModelReroute(ev) => {
+                if self.config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID
+                    && self.config.model.as_deref() == Some(GITHUB_COPILOT_AUTO_MODEL)
+                {
+                    self.set_model(&ev.to_model);
+                    self.add_info_message(
+                        format!("Auto selected {} for this session.", ev.to_model),
+                        /*hint*/ None,
+                    );
+                }
+            }
             EventMsg::Error(ErrorEvent {
                 message,
                 codex_error_info,
@@ -8091,9 +8133,39 @@ impl ChatWidget {
             .map(|preset| preset.model.to_string())
             .unwrap_or_else(|| self.model_display_name());
 
+        let copilot_auto_current = provider_matches_current
+            && provider_id.unwrap_or(self.config.model_provider_id.as_str())
+                == GITHUB_COPILOT_PROVIDER_ID
+            && self.config.model.as_deref() == Some(GITHUB_COPILOT_AUTO_MODEL);
+
         let (mut auto_presets, other_presets): (Vec<ModelPreset>, Vec<ModelPreset>) = presets
             .into_iter()
             .partition(|preset| Self::is_auto_model(&preset.model));
+
+        if provider_id.unwrap_or(self.config.model_provider_id.as_str())
+            == GITHUB_COPILOT_PROVIDER_ID
+            && !auto_presets
+                .iter()
+                .any(|preset| preset.model == GITHUB_COPILOT_AUTO_MODEL)
+        {
+            auto_presets.push(ModelPreset {
+                id: GITHUB_COPILOT_AUTO_MODEL.to_string(),
+                model: GITHUB_COPILOT_AUTO_MODEL.to_string(),
+                display_name: GITHUB_COPILOT_AUTO_MODEL_LABEL.to_string(),
+                description:
+                    "Let GitHub Copilot automatically route each request to the best available model."
+                        .to_string(),
+                default_reasoning_effort: ReasoningEffort::Medium,
+                supported_reasoning_efforts: Vec::new(),
+                supports_personality: false,
+                is_default: false,
+                upgrade: None,
+                show_in_picker: true,
+                availability_nux: None,
+                supported_in_api: true,
+                input_modalities: vec![],
+            });
+        }
 
         if auto_presets.is_empty() {
             self.open_all_models_popup_for_provider(other_presets, provider_id);
@@ -8108,10 +8180,11 @@ impl ChatWidget {
                 let description =
                     (!preset.description.is_empty()).then_some(preset.description.clone());
                 let model = preset.model.clone();
-                let should_prompt_plan_mode_scope = self.should_prompt_plan_mode_reasoning_scope(
-                    model.as_str(),
-                    Some(preset.default_reasoning_effort),
-                );
+                let should_prompt_plan_mode_scope = model != GITHUB_COPILOT_AUTO_MODEL
+                    && self.should_prompt_plan_mode_reasoning_scope(
+                        model.as_str(),
+                        Some(preset.default_reasoning_effort),
+                    );
                 let actions = Self::model_selection_actions(
                     target_provider_id.clone(),
                     model.clone(),
@@ -8120,9 +8193,16 @@ impl ChatWidget {
                     provider_matches_current,
                 );
                 SelectionItem {
-                    name: model.clone(),
+                    name: Self::model_ui_name(
+                        provider_id.unwrap_or(self.config.model_provider_id.as_str()),
+                        &model,
+                    ),
                     description,
-                    is_current: provider_matches_current && model.as_str() == current_model,
+                    is_current: if model == GITHUB_COPILOT_AUTO_MODEL {
+                        copilot_auto_current
+                    } else {
+                        provider_matches_current && model.as_str() == current_model
+                    },
                     is_default: preset.is_default,
                     actions,
                     dismiss_on_select: true,
@@ -8173,15 +8253,16 @@ impl ChatWidget {
     }
 
     fn is_auto_model(model: &str) -> bool {
-        model.starts_with("codex-auto-")
+        model == GITHUB_COPILOT_AUTO_MODEL || model.starts_with("codex-auto-")
     }
 
     fn auto_model_order(model: &str) -> usize {
         match model {
+            GITHUB_COPILOT_AUTO_MODEL => 0,
             "codex-auto-fast" => 0,
             "codex-auto-balanced" => 1,
             "codex-auto-thorough" => 2,
-            _ => 3,
+            _ => 4,
         }
     }
 
@@ -8223,7 +8304,10 @@ impl ChatWidget {
                 });
             })];
             items.push(SelectionItem {
-                name: preset.model.clone(),
+                name: Self::model_ui_name(
+                    provider_id.unwrap_or(self.config.model_provider_id.as_str()),
+                    &preset.model,
+                ),
                 description,
                 is_current,
                 is_default: preset.is_default,
@@ -8301,6 +8385,13 @@ impl ChatWidget {
         apply_in_current_session: bool,
     ) -> Vec<SelectionAction> {
         vec![Box::new(move |tx| {
+            let runtime_model = if provider_id.as_deref() == Some(GITHUB_COPILOT_PROVIDER_ID)
+                && model_for_action == GITHUB_COPILOT_AUTO_MODEL
+            {
+                None
+            } else {
+                Some(model_for_action.clone())
+            };
             if should_prompt_plan_mode_scope && apply_in_current_session {
                 tx.send(AppEvent::OpenPlanReasoningScopePrompt {
                     model: model_for_action.clone(),
@@ -8322,7 +8413,7 @@ impl ChatWidget {
                     /*sandbox_policy*/ None,
                     /*windows_sandbox_level*/ None,
                     provider_id.clone(),
-                    Some(model_for_action.clone()),
+                    runtime_model,
                     Some(effort_for_action),
                     /*summary*/ None,
                     /*service_tier*/ None,
@@ -9994,10 +10085,11 @@ impl ChatWidget {
         if model.is_empty() {
             return DEFAULT_MODEL_DISPLAY_NAME.to_string();
         }
-        if self.config.model_provider_id == "github-copilot" {
-            format!("{model} (copilot)")
+        let model_label = Self::model_ui_name(&self.config.model_provider_id, model);
+        if self.config.model_provider_id == GITHUB_COPILOT_PROVIDER_ID {
+            format!("{model_label} (copilot)")
         } else {
-            model.to_string()
+            model_label
         }
     }
 
@@ -10086,8 +10178,9 @@ impl ChatWidget {
         if previous_mode != next_mode
             && (previous_model != next_model || previous_effort != next_effort)
         {
-            let mut message = format!("Model changed to {next_model}");
-            if !next_model.starts_with("codex-auto-") {
+            let next_model_label = Self::model_ui_name(&self.config.model_provider_id, next_model);
+            let mut message = format!("Model changed to {next_model_label}");
+            if !Self::is_auto_model(next_model) {
                 let reasoning_label = match next_effort {
                     Some(ReasoningEffortConfig::Minimal) => "minimal",
                     Some(ReasoningEffortConfig::Low) => "low",

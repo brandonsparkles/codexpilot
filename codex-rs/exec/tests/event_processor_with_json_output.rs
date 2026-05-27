@@ -1543,29 +1543,24 @@ fn turn_failure_prefers_structured_error_message() {
 }
 
 #[test]
-fn model_reroute_surfaces_as_error_item() {
+fn model_reroute_surfaces_resolved_model_event() {
     let mut processor = EventProcessorWithJsonOutput::new(/*last_message_path*/ None);
 
     let collected = processor.collect_thread_events(ServerNotification::ModelRerouted(
         codex_app_server_protocol::ModelReroutedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-            from_model: "gpt-5".to_string(),
-            to_model: "gpt-5-mini".to_string(),
-            reason: codex_app_server_protocol::ModelRerouteReason::HighRiskCyberActivity,
+            from_model: "auto".to_string(),
+            to_model: "gpt-5.4".to_string(),
+            reason: codex_app_server_protocol::ModelRerouteReason::AutoModelSelection,
         },
     ));
 
     assert_eq!(collected.status, CodexStatus::Running);
     assert_eq!(collected.events.len(), 1);
-    let ThreadEvent::ItemCompleted(ItemCompletedEvent { item }) = &collected.events[0] else {
-        panic!("expected ItemCompleted");
+    let ThreadEvent::ModelResolved(event) = &collected.events[0] else {
+        panic!("expected ModelResolved");
     };
-    assert_eq!(item.id, "item_0");
-    assert_eq!(
-        item.details,
-        ThreadItemDetails::Error(ErrorItem {
-            message: "model rerouted: gpt-5 -> gpt-5-mini (HighRiskCyberActivity)".to_string(),
-        })
-    );
+    assert_eq!(event.configured_model, "auto");
+    assert_eq!(event.resolved_model, "gpt-5.4");
 }

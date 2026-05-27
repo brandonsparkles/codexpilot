@@ -33,6 +33,10 @@ pub(crate) struct SessionState {
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
+    /// Concrete backend model most recently announced for a provider auto-routing
+    /// alias (e.g. GitHub Copilot `auto`). Used to emit the resolved model to the
+    /// UI exactly once per change rather than on every turn.
+    announced_auto_resolution: Option<String>,
 }
 
 impl SessionState {
@@ -51,7 +55,18 @@ impl SessionState {
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
             granted_permissions: None,
+            announced_auto_resolution: None,
         }
+    }
+
+    /// Returns the concrete model last announced for an auto-routing alias.
+    pub(crate) fn announced_auto_resolution(&self) -> Option<&str> {
+        self.announced_auto_resolution.as_deref()
+    }
+
+    /// Records the concrete model announced for an auto-routing alias.
+    pub(crate) fn set_announced_auto_resolution(&mut self, model: Option<String>) {
+        self.announced_auto_resolution = model;
     }
 
     // History helpers

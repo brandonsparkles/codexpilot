@@ -8,6 +8,7 @@ use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
+use codex_protocol::openai_models::ModelVisibility;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::responses::mount_models_once;
@@ -901,6 +902,100 @@ fn build_available_models_prefers_gpt_5_3_codex_for_github_copilot() {
             .map(|preset| preset.model.as_str()),
         Some("gpt-5.3-codex")
     );
+}
+
+#[tokio::test]
+async fn apply_remote_models_preserves_bundled_metadata_for_partial_models() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = provider_for("http://example.test".to_string());
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    let bundled = manager
+        .get_remote_models()
+        .await
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("bundled gpt-5.4 model");
+
+    let mut remote = remote_model("gpt-5.4", "GPT-5.4 (Copilot)", /*priority*/ i32::MAX);
+    remote.base_instructions.clear();
+    remote.description = Some("Frontier model from GitHub Copilot.".to_string());
+    remote.default_reasoning_level = None;
+    remote.supported_reasoning_levels.clear();
+    remote.model_messages = None;
+    remote.visibility = ModelVisibility::Hide;
+    remote.supported_in_api = false;
+
+    manager.apply_remote_models(vec![remote]).await;
+
+    let merged = manager
+        .get_remote_models()
+        .await
+        .into_iter()
+        .find(|model| model.slug == "gpt-5.4")
+        .expect("merged gpt-5.4 model");
+
+    assert_eq!(merged.display_name, "GPT-5.4 (Copilot)");
+    assert_eq!(
+        merged.description.as_deref(),
+        Some("Frontier model from GitHub Copilot.")
+    );
+    assert_eq!(merged.visibility, ModelVisibility::Hide);
+    assert!(!merged.supported_in_api);
+    assert_eq!(merged.base_instructions, bundled.base_instructions);
+    assert_eq!(merged.model_messages, bundled.model_messages);
+    assert_eq!(
+        merged.supported_reasoning_levels,
+        bundled.supported_reasoning_levels
+    );
+    assert_eq!(
+        merged.supports_parallel_tool_calls,
+        bundled.supports_parallel_tool_calls
+    );
+}
+
+#[tokio::test]
+async fn apply_remote_models_uses_fallback_metadata_for_new_partial_models() {
+    let codex_home = tempdir().expect("temp dir");
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let provider = provider_for("http://example.test".to_string());
+    let manager = ModelsManager::with_provider_for_tests(
+        codex_home.path().to_path_buf(),
+        auth_manager,
+        provider,
+    );
+
+    let mut remote = remote_model(
+        "copilot-preview-test",
+        "Copilot Preview Test",
+        /*priority*/ i32::MAX,
+    );
+    remote.base_instructions.clear();
+    remote.default_reasoning_level = None;
+    remote.supported_reasoning_levels.clear();
+    remote.model_messages = None;
+
+    manager.apply_remote_models(vec![remote]).await;
+
+    let merged = manager
+        .get_remote_models()
+        .await
+        .into_iter()
+        .find(|model| model.slug == "copilot-preview-test")
+        .expect("merged fallback model");
+
+    assert_eq!(merged.display_name, "Copilot Preview Test");
+    assert_eq!(merged.visibility, ModelVisibility::List);
+    assert_eq!(
+        merged.base_instructions,
+        crate::model_info::BASE_INSTRUCTIONS
+    );
+    assert_eq!(merged.context_window, Some(272_000));
 }
 
 #[test]

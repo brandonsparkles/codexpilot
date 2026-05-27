@@ -417,6 +417,30 @@
             },
             "method": {
               "enum": [
+                "thread/turnContext/override"
+              ],
+              "title": "Thread/turnContext/overrideRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/ThreadTurnContextOverrideParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Thread/turnContext/overrideRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "thread/unarchive"
               ],
               "title": "Thread/unarchiveRequestMethod",
@@ -9361,7 +9385,8 @@
       },
       "ModelRerouteReason": {
         "enum": [
-          "highRiskCyberActivity"
+          "highRiskCyberActivity",
+          "autoModelSelection"
         ],
         "type": "string"
       },
@@ -14172,6 +14197,158 @@
         "title": "ThreadTokenUsageUpdatedNotification",
         "type": "object"
       },
+      "ThreadTurnContextOverrideParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "approvalPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AskForApproval"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the approval policy for subsequent turns."
+          },
+          "approvalsReviewer": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalsReviewer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override where approval requests are routed for review on subsequent turns."
+          },
+          "collaborationMode": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/CollaborationMode"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the collaboration mode for subsequent turns."
+          },
+          "cwd": {
+            "description": "Override the working directory for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "effort": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ReasoningEffort"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning effort for subsequent turns."
+          },
+          "model": {
+            "description": "Override the model for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "modelProvider": {
+            "description": "Override the model provider for subsequent turns.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "personality": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Personality"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the personality for subsequent turns."
+          },
+          "sandboxPolicy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the sandbox policy for subsequent turns."
+          },
+          "serviceTier": {
+            "anyOf": [
+              {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ServiceTier"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the service tier for subsequent turns."
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ReasoningSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the reasoning summary for subsequent turns."
+          },
+          "threadId": {
+            "type": "string"
+          },
+          "windowsSandboxLevel": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/WindowsSandboxLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Override the Windows sandbox level for subsequent turns."
+          }
+        },
+        "required": [
+          "threadId"
+        ],
+        "title": "ThreadTurnContextOverrideParams",
+        "type": "object"
+      },
+      "ThreadTurnContextOverrideResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "ThreadTurnContextOverrideResponse",
+        "type": "object"
+      },
       "ThreadUnarchiveParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -15025,6 +15202,14 @@
           }
         },
         "type": "object"
+      },
+      "WindowsSandboxLevel": {
+        "enum": [
+          "disabled",
+          "restricted-token",
+          "elevated"
+        ],
+        "type": "string"
       },
       "WindowsSandboxSetupCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",

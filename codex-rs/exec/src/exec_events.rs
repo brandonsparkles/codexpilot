@@ -31,6 +31,9 @@ pub enum ThreadEvent {
     /// Signals that an item has reached a terminal state—either success or failure.
     #[serde(rename = "item.completed")]
     ItemCompleted(ItemCompletedEvent),
+    /// Indicates which backend model actually handled the turn.
+    #[serde(rename = "model.resolved")]
+    ModelResolved(ModelResolvedEvent),
     /// Represents an unrecoverable error emitted directly by the event stream.
     #[serde(rename = "error")]
     Error(ThreadErrorEvent),
@@ -54,6 +57,12 @@ pub struct TurnCompletedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct TurnFailedEvent {
     pub error: ThreadErrorEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct ModelResolvedEvent {
+    pub configured_model: String,
+    pub resolved_model: String,
 }
 
 /// Describes the usage of tokens during a turn.

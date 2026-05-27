@@ -487,12 +487,96 @@ impl ModelsManager {
                 .iter()
                 .position(|existing| existing.slug == model.slug)
             {
-                existing_models[existing_index] = model;
+                let existing = existing_models[existing_index].clone();
+                existing_models[existing_index] = Self::merge_remote_model(existing, model);
             } else {
-                existing_models.push(model);
+                let fallback = model_info::model_info_from_slug(&model.slug);
+                existing_models.push(Self::merge_remote_model(fallback, model));
             }
         }
         *self.remote_models.write().await = existing_models;
+    }
+
+    fn merge_remote_model(existing: ModelInfo, remote: ModelInfo) -> ModelInfo {
+        if !Self::remote_model_metadata_is_partial(&remote) {
+            return remote;
+        }
+
+        let mut merged = existing;
+        merged.slug = remote.slug;
+        if !remote.display_name.is_empty() {
+            merged.display_name = remote.display_name;
+        }
+        if let Some(description) = remote.description {
+            merged.description = Some(description);
+        }
+        if let Some(default_reasoning_level) = remote.default_reasoning_level {
+            merged.default_reasoning_level = Some(default_reasoning_level);
+        }
+        if !remote.supported_reasoning_levels.is_empty() {
+            merged.supported_reasoning_levels = remote.supported_reasoning_levels;
+        }
+        merged.shell_type = remote.shell_type;
+        merged.visibility = remote.visibility;
+        merged.supported_in_api = remote.supported_in_api;
+        if remote.priority != i32::MAX {
+            merged.priority = remote.priority;
+        }
+        if let Some(availability_nux) = remote.availability_nux {
+            merged.availability_nux = Some(availability_nux);
+        }
+        if let Some(upgrade) = remote.upgrade {
+            merged.upgrade = Some(upgrade);
+        }
+        if !remote.base_instructions.is_empty() {
+            merged.base_instructions = remote.base_instructions;
+        }
+        if let Some(model_messages) = remote.model_messages {
+            merged.model_messages = Some(model_messages);
+        }
+        if remote.supports_reasoning_summaries {
+            merged.supports_reasoning_summaries = true;
+            merged.default_reasoning_summary = remote.default_reasoning_summary;
+        }
+        if remote.support_verbosity {
+            merged.support_verbosity = true;
+        }
+        if let Some(default_verbosity) = remote.default_verbosity {
+            merged.default_verbosity = Some(default_verbosity);
+        }
+        if let Some(apply_patch_tool_type) = remote.apply_patch_tool_type {
+            merged.apply_patch_tool_type = Some(apply_patch_tool_type);
+        }
+        if remote.supports_parallel_tool_calls {
+            merged.supports_parallel_tool_calls = true;
+        }
+        if remote.supports_image_detail_original {
+            merged.supports_image_detail_original = true;
+        }
+        if let Some(context_window) = remote.context_window {
+            merged.context_window = Some(context_window);
+        }
+        if let Some(auto_compact_token_limit) = remote.auto_compact_token_limit {
+            merged.auto_compact_token_limit = Some(auto_compact_token_limit);
+        }
+        if remote.effective_context_window_percent != 95 {
+            merged.effective_context_window_percent = remote.effective_context_window_percent;
+        }
+        if !remote.experimental_supported_tools.is_empty() {
+            merged.experimental_supported_tools = remote.experimental_supported_tools;
+        }
+        if remote.supports_search_tool {
+            merged.supports_search_tool = true;
+        }
+
+        merged
+    }
+
+    fn remote_model_metadata_is_partial(model: &ModelInfo) -> bool {
+        model.base_instructions.is_empty()
+            && model.model_messages.is_none()
+            && model.default_reasoning_level.is_none()
+            && model.supported_reasoning_levels.is_empty()
     }
 
     fn load_remote_models_from_file() -> Result<Vec<ModelInfo>, std::io::Error> {
