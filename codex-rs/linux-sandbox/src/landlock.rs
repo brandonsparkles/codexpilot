@@ -247,13 +247,7 @@ fn install_network_seccomp_filter_on_current_thread(
         rules,
         SeccompAction::Allow,                     // default – allow
         SeccompAction::Errno(libc::EPERM as u32), // when rule matches – return EPERM
-        if cfg!(target_arch = "x86_64") {
-            TargetArch::x86_64
-        } else if cfg!(target_arch = "aarch64") {
-            TargetArch::aarch64
-        } else {
-            unimplemented!("unsupported architecture for seccomp filter");
-        },
+        seccomp_target_arch(),
     )?;
 
     let prog: BpfProgram = filter.try_into()?;
@@ -261,6 +255,28 @@ fn install_network_seccomp_filter_on_current_thread(
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+/// Resolve the seccomp `TargetArch` for the architecture this binary is built
+/// for. Seccomp BPF filters are only meaningful for the two architectures the
+/// sandbox supports, so unsupported targets are rejected at *compile time* via
+/// `compile_error!` rather than panicking at runtime with `unimplemented!()`.
+#[cfg(target_arch = "x86_64")]
+fn seccomp_target_arch() -> TargetArch {
+    TargetArch::x86_64
+}
+
+#[cfg(target_arch = "aarch64")]
+fn seccomp_target_arch() -> TargetArch {
+    TargetArch::aarch64
+}
+
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+fn seccomp_target_arch() -> TargetArch {
+    compile_error!(
+        "seccomp network sandboxing is only supported on x86_64 and aarch64; \
+         build for one of those architectures or disable the seccomp sandbox"
+    );
 }
 
 #[cfg(test)]

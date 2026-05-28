@@ -1,5 +1,7 @@
 use std::path::Path;
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use shlex::split as shlex_split;
@@ -33,6 +35,12 @@ fn is_dangerous_powershell(command: &[String]) -> bool {
     let Some(parsed) = parse_powershell_invocation(rest) else {
         return false;
     };
+
+    // An `-EncodedCommand` payload we could not decode/inspect is treated as
+    // dangerous: we cannot prove it is safe, so fail closed.
+    if parsed.undecodable_encoded_command {
+        return true;
+    }
 
     let tokens_lc: Vec<String> = parsed
         .tokens
@@ -105,7 +113,9 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
     for arg in iter.by_ref() {
         let lower = arg.to_ascii_lowercase();
         match lower.as_str() {
-            "/c" | "/r" | "-c" => break,
+            // `/k` runs the command body and keeps the shell open afterwards;
+            // its body must be inspected the same as `/c`/`/r` (run-then-exit).
+            "/c" | "/r" | "/k" | "-c" => break,
             _ if lower.starts_with('/') => continue,
             // Unknown tokens before the command body => bail.
             _ => return false,
@@ -364,6 +374,26 @@ fn is_browser_executable(name: &str) -> bool {
 
 struct ParsedPowershell {
     tokens: Vec<String>,
+    /// Set when the invocation carries an `-EncodedCommand`/`-enc` payload that
+    /// we could not decode/inspect. Such invocations are treated as dangerous
+    /// (fail closed) so a malicious base64 script cannot bypass the checks.
+    undecodable_encoded_command: bool,
+}
+
+impl ParsedPowershell {
+    fn from_tokens(tokens: Vec<String>) -> Self {
+        Self {
+            tokens,
+            undecodable_encoded_command: false,
+        }
+    }
+
+    fn undecodable() -> Self {
+        Self {
+            tokens: Vec::new(),
+            undecodable_encoded_command: true,
+        }
+    }
 }
 
 fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
@@ -382,7 +412,34 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                     return None;
                 }
                 let tokens = shlex_split(script)?;
-                return Some(ParsedPowershell { tokens });
+                return Some(ParsedPowershell::from_tokens(tokens));
+            }
+            // `-EncodedCommand` takes a base64-encoded UTF-16LE script. PowerShell
+            // accepts any unambiguous prefix of the parameter name (`-en`, `-enco`,
+            // `-encod`, …, `-encodedcommand`) plus the documented `-e`/`-ec`
+            // aliases. Decode the payload and feed the resulting script through the
+            // SAME dangerous-command inspection. If decoding fails we cannot inspect
+            // the payload, so we fail closed and mark it dangerous.
+            //
+            // The colon form `-EncodedCommand:<b64>` is handled first.
+            _ if encoded_command_inline(&lower).is_some() => {
+                if idx + 1 != args.len() {
+                    return None;
+                }
+                let encoded = encoded_command_inline(&lower).unwrap_or("");
+                // Re-derive from the original (non-lowercased) arg to preserve
+                // base64 case, which is significant.
+                let encoded = arg.split_once(':').map(|(_, v)| v).unwrap_or(encoded);
+                return Some(decode_encoded_command(encoded));
+            }
+            _ if is_encoded_command_flag(&lower) => {
+                let Some(encoded) = args.get(idx + 1) else {
+                    return Some(ParsedPowershell::undecodable());
+                };
+                if idx + 2 != args.len() {
+                    return None;
+                }
+                return Some(decode_encoded_command(encoded));
             }
             _ if lower.starts_with("-command:") || lower.starts_with("/command:") => {
                 if idx + 1 != args.len() {
@@ -390,7 +447,7 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                 }
                 let (_, script) = arg.split_once(':')?;
                 let tokens = shlex_split(script)?;
-                return Some(ParsedPowershell { tokens });
+                return Some(ParsedPowershell::from_tokens(tokens));
             }
             "-nologo" | "-noprofile" | "-noninteractive" | "-mta" | "-sta" => {
                 idx += 1;
@@ -400,12 +457,72 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
             }
             _ => {
                 let rest = args[idx..].to_vec();
-                return Some(ParsedPowershell { tokens: rest });
+                return Some(ParsedPowershell::from_tokens(rest));
             }
         }
     }
 
     None
+}
+
+/// True if `lower` (an already-lowercased argv token) names PowerShell's
+/// `-EncodedCommand` parameter in standalone form (value is the NEXT argv token).
+///
+/// PowerShell resolves any unambiguous prefix of a parameter name, so `-en`,
+/// `-enco`, … `-encodedcommand` all bind to EncodedCommand. We also accept the
+/// documented `-e` and `-ec` aliases. Over-matching is safe: a benign encoded
+/// command still decodes and passes through the normal inspection.
+fn is_encoded_command_flag(lower: &str) -> bool {
+    let Some(rest) = lower.strip_prefix('-').or_else(|| lower.strip_prefix('/')) else {
+        return false;
+    };
+    // Documented aliases that are not literal prefixes of "encodedcommand".
+    if rest == "e" || rest == "ec" {
+        return true;
+    }
+    // Any non-empty prefix of "encodedcommand" (e.g. "en", "enco", "encod").
+    !rest.is_empty() && "encodedcommand".starts_with(rest)
+}
+
+/// If `lower` is the colon/inline form of an EncodedCommand flag
+/// (e.g. `-enc:<b64>`, `-encodedcommand:<b64>`), return the (lowercased) value
+/// portion. Returns `None` when `lower` is not an inline EncodedCommand flag.
+/// The caller re-derives the value from the original-case arg to keep base64
+/// case intact.
+fn encoded_command_inline(lower: &str) -> Option<&str> {
+    let (flag, value) = lower.split_once(':')?;
+    if is_encoded_command_flag(flag) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+/// Decode a PowerShell `-EncodedCommand` payload (base64 of a UTF-16LE script)
+/// into a token list. On any decode failure we return an `undecodable` marker so
+/// the caller fails closed and treats the invocation as dangerous.
+fn decode_encoded_command(encoded: &str) -> ParsedPowershell {
+    // PowerShell ignores surrounding whitespace in the encoded argument.
+    let trimmed = encoded.trim();
+    let Ok(raw) = BASE64_STANDARD.decode(trimmed) else {
+        return ParsedPowershell::undecodable();
+    };
+    // The payload is UTF-16LE; reassemble u16 code units (little-endian).
+    if raw.len() % 2 != 0 {
+        return ParsedPowershell::undecodable();
+    }
+    let units: Vec<u16> = raw
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    let Ok(script) = String::from_utf16(&units) else {
+        return ParsedPowershell::undecodable();
+    };
+    match shlex_split(&script) {
+        Some(tokens) => ParsedPowershell::from_tokens(tokens),
+        // Decoded fine but we cannot tokenize it for inspection: fail closed.
+        None => ParsedPowershell::undecodable(),
+    }
 }
 
 #[cfg(test)]
@@ -751,5 +868,115 @@ mod tests {
             "-Command",
             "Get-ChildItem -Force; Remove-Item test"
         ])));
+    }
+
+    // `cmd /k` runs its command body (then keeps the shell open); its body must
+    // be inspected the same as `/c`.
+    #[test]
+    fn cmd_k_del_force_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd", "/k", "del", "/f", "file.txt"
+        ])));
+    }
+
+    #[test]
+    fn cmd_k_start_url_single_string_is_dangerous() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/k",
+            "start https://example.com"
+        ])));
+    }
+
+    // `-EncodedCommand` carries a base64 UTF-16LE script that must be decoded and
+    // routed through the same dangerous-command inspection.
+    #[test]
+    fn powershell_encoded_start_process_url_is_dangerous() {
+        // base64(UTF-16LE("Start-Process 'https://example.com'"))
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-EncodedCommand",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_enc_alias_remove_item_force_is_dangerous() {
+        // base64(UTF-16LE("Remove-Item test -Force")) via the -enc alias.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "pwsh",
+            "-enc",
+            "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAdABlAHMAdAAgAC0ARgBvAHIAYwBlAA=="
+        ])));
+    }
+
+    // PowerShell binds any unambiguous prefix of `-EncodedCommand`, so `-enco`
+    // (and `-en`, `-encod`, …) must be detected too — not just the full name.
+    #[test]
+    fn powershell_encoded_command_prefix_alias_is_dangerous() {
+        // base64(UTF-16LE("Start-Process 'https://example.com'")) via `-enco`.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-enco",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_encoded_command_two_char_prefix_is_dangerous() {
+        // `-en` is still an unambiguous prefix of EncodedCommand.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-en",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_ec_alias_is_dangerous() {
+        // `-ec` is a documented EncodedCommand alias (not a literal name prefix).
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "pwsh",
+            "-ec",
+            "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAdABlAHMAdAAgAC0ARgBvAHIAYwBlAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_encoded_command_inline_colon_is_dangerous() {
+        // Inline colon form `-EncodedCommand:<b64>` must also be decoded.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-EncodedCommand:UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_encoded_garbage_payload_is_dangerous() {
+        // Non-base64 payload can't be decoded/inspected => fail closed.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-EncodedCommand",
+            "not valid base64!!!"
+        ])));
+    }
+
+    #[test]
+    fn powershell_encoded_benign_payload_is_not_flagged() {
+        // base64(UTF-16LE("Get-ChildItem")) decodes to a benign command.
+        let encoded = {
+            use base64::Engine as _;
+            let script = "Get-ChildItem";
+            let mut utf16 = Vec::new();
+            for unit in script.encode_utf16() {
+                utf16.extend_from_slice(&unit.to_le_bytes());
+            }
+            base64::engine::general_purpose::STANDARD.encode(utf16)
+        };
+        assert!(!is_dangerous_command_windows(&[
+            "powershell".to_string(),
+            "-EncodedCommand".to_string(),
+            encoded,
+        ]));
     }
 }
