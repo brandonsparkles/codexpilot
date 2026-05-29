@@ -408,8 +408,12 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
         match lower.as_str() {
             "-command" | "/command" | "-c" => {
                 let script = args.get(idx + 1)?;
+                // Trailing tokens after the script body (e.g. `-Command <script>
+                // -NoExit`) mean we cannot fully validate the invocation. Real
+                // PowerShell still runs the script, so fail closed rather than
+                // returning None (which would fail OPEN at the caller).
                 if idx + 2 != args.len() {
-                    return None;
+                    return Some(ParsedPowershell::undecodable());
                 }
                 let tokens = shlex_split(script)?;
                 return Some(ParsedPowershell::from_tokens(tokens));
@@ -423,8 +427,11 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
             //
             // The colon form `-EncodedCommand:<b64>` is handled first.
             _ if encoded_command_inline(&lower).is_some() => {
+                // Trailing tokens after the inline `-EncodedCommand:<b64>` arg
+                // mean we cannot fully validate the invocation; fail closed
+                // instead of returning None (which fails OPEN at the caller).
                 if idx + 1 != args.len() {
-                    return None;
+                    return Some(ParsedPowershell::undecodable());
                 }
                 let encoded = encoded_command_inline(&lower).unwrap_or("");
                 // Re-derive from the original (non-lowercased) arg to preserve
@@ -436,14 +443,22 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
                 let Some(encoded) = args.get(idx + 1) else {
                     return Some(ParsedPowershell::undecodable());
                 };
+                // Trailing tokens after the encoded value (e.g.
+                // `-EncodedCommand <b64> -NoExit`) mean we cannot fully validate
+                // the invocation; PowerShell still executes the encoded script,
+                // so fail closed instead of returning None (which fails OPEN).
                 if idx + 2 != args.len() {
-                    return None;
+                    return Some(ParsedPowershell::undecodable());
                 }
                 return Some(decode_encoded_command(encoded));
             }
             _ if lower.starts_with("-command:") || lower.starts_with("/command:") => {
+                // Trailing tokens after the inline `-Command:<script>` arg mean
+                // we cannot fully validate the invocation; PowerShell still runs
+                // the script, so fail closed instead of returning None (which
+                // fails OPEN at the caller).
                 if idx + 1 != args.len() {
-                    return None;
+                    return Some(ParsedPowershell::undecodable());
                 }
                 let (_, script) = arg.split_once(':')?;
                 let tokens = shlex_split(script)?;
@@ -452,17 +467,89 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
             "-nologo" | "-noprofile" | "-noninteractive" | "-mta" | "-sta" => {
                 idx += 1;
             }
+            // Value-taking switches (e.g. `-WindowStyle hidden`, `-ExecutionPolicy
+            // bypass`, `-File script.ps1`). These consume the FOLLOWING token as
+            // their value. If we treated them as valueless (the generic `-` arm
+            // below), the value would fall through to the positional arm and the
+            // parser would return the remaining args raw — including a trailing
+            // `-EncodedCommand <b64>` that then never gets decoded/inspected
+            // (the canonical `powershell -nop -w hidden -EncodedCommand <b64>`
+            // bypass). Consuming the value keeps `-EncodedCommand` recognizable.
+            _ if is_value_taking_flag(&lower) => {
+                // Skip the flag and its value. A trailing value-taking flag with
+                // no following token is just consumed (idx += 1) — fall through
+                // to the loop's normal termination.
+                idx += if idx + 1 < args.len() { 2 } else { 1 };
+            }
             _ if lower.starts_with('-') => {
                 idx += 1;
             }
             _ => {
-                let rest = args[idx..].to_vec();
-                return Some(ParsedPowershell::from_tokens(rest));
+                // Positional fallthrough: the remaining args are the command/
+                // script body. Backstop against any value-taking flag we failed
+                // to model above: if a `-Command`/`-EncodedCommand` flag is still
+                // present in the tail, we cannot have routed it through the
+                // dedicated decode arms, so fail closed rather than returning the
+                // (possibly base64-encoded) payload raw and uninspected.
+                let rest = &args[idx..];
+                if rest.iter().any(|a| {
+                    let l = a.to_ascii_lowercase();
+                    is_encoded_command_flag(&l)
+                        || encoded_command_inline(&l).is_some()
+                        || matches!(l.as_str(), "-command" | "/command" | "-c")
+                        || l.starts_with("-command:")
+                        || l.starts_with("/command:")
+                }) {
+                    return Some(ParsedPowershell::undecodable());
+                }
+                return Some(ParsedPowershell::from_tokens(rest.to_vec()));
             }
         }
     }
 
     None
+}
+
+/// True if `lower` (an already-lowercased argv token) names a PowerShell switch
+/// that consumes the NEXT argv token as its value. PowerShell resolves any
+/// unambiguous prefix of a parameter name, so we match prefixes too (e.g. `-w`
+/// for `-WindowStyle`, `-ex`/`-exec` for `-ExecutionPolicy`).
+///
+/// Modeling these is a security requirement: an unmodeled value-taking flag lets
+/// its value slip into the positional stream, which can carry an undecoded
+/// `-EncodedCommand <b64>` past inspection. The positional-arm backstop in
+/// `parse_powershell_invocation` covers any flag missed here, but keeping this
+/// list complete lets benign invocations (e.g. `-w hidden -EncodedCommand
+/// <benign>`) still decode and pass through normally instead of failing closed.
+fn is_value_taking_flag(lower: &str) -> bool {
+    let Some(rest) = lower.strip_prefix('-').or_else(|| lower.strip_prefix('/')) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return false;
+    }
+    // Inline `-flag:value` forms carry their own value; they are not next-token
+    // value consumers, so they are not handled here.
+    if rest.contains(':') {
+        return false;
+    }
+    // Canonical PowerShell value-taking parameter names. Any non-empty
+    // unambiguous prefix of these binds to the parameter (PowerShell semantics),
+    // so `-w` -> windowstyle, `-ex`/`-exec` -> executionpolicy, etc.
+    const VALUE_TAKING: &[&str] = &[
+        "windowstyle",
+        "executionpolicy",
+        "file",
+        "version",
+        "inputformat",
+        "outputformat",
+        "configurationname",
+        "psconsolefile",
+        "settingsfile",
+        "workingdirectory",
+        "custompipename",
+    ];
+    VALUE_TAKING.iter().any(|name| name.starts_with(rest))
 }
 
 /// True if `lower` (an already-lowercased argv token) names PowerShell's
@@ -978,5 +1065,140 @@ mod tests {
             "-EncodedCommand".to_string(),
             encoded,
         ]));
+    }
+
+    // Trailing tokens after the value mean the invocation cannot be fully
+    // validated. PowerShell still executes the script/encoded payload (e.g.
+    // `-NoExit` is a benign host switch), so these must fail CLOSED (dangerous)
+    // rather than fail open by returning None at the parser.
+    #[test]
+    fn powershell_encoded_command_trailing_token_is_dangerous() {
+        // `-EncodedCommand <b64> -NoExit`
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-EncodedCommand",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA==",
+            "-NoExit"
+        ])));
+    }
+
+    #[test]
+    fn powershell_encoded_command_inline_trailing_token_is_dangerous() {
+        // `-EncodedCommand:<b64> -NoExit`
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-EncodedCommand:UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA==",
+            "-NoExit"
+        ])));
+    }
+
+    #[test]
+    fn powershell_command_trailing_token_is_dangerous() {
+        // `-Command <script> -NoExit`
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command",
+            "Start-Process 'https://example.com'",
+            "-NoExit"
+        ])));
+    }
+
+    #[test]
+    fn powershell_command_inline_trailing_token_is_dangerous() {
+        // `-Command:<script> -NoExit`
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-Command:Start-Process 'https://example.com'",
+            "-NoExit"
+        ])));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Value-taking flags preceding -EncodedCommand. Before the fix, a switch like
+    // `-w hidden` / `-WindowStyle hidden` / `-ExecutionPolicy bypass` was parsed
+    // as valueless, so its value (`hidden`/`bypass`) became a bare positional and
+    // the parser returned the remaining args — including `-EncodedCommand <b64>` —
+    // raw and UNDECODED, slipping the payload past inspection. The canonical
+    // malware form is `powershell -nop -w hidden -EncodedCommand <b64>`.
+    //
+    // Two tests pin the behavior: the malware payload must be flagged AND a benign
+    // payload behind the same preceding flags must NOT be flagged. The benign case
+    // is the discriminating one: it passes ONLY if `-w hidden` was actually
+    // consumed and the decoder reached (a lazy "fail closed on any -w" would
+    // wrongly flag it).
+    #[test]
+    fn powershell_windowstyle_then_encoded_start_process_url_is_dangerous() {
+        // base64(UTF-16LE("Start-Process 'https://example.com'"))
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-nop",
+            "-w",
+            "hidden",
+            "-EncodedCommand",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_windowstyle_then_encoded_benign_payload_is_not_flagged() {
+        // base64(UTF-16LE("Get-ChildItem")) — benign. Must decode and pass through
+        // (NOT flagged), proving `-w hidden` was consumed and the decoder reached
+        // rather than the invocation being blanket-failed-closed.
+        let encoded = {
+            use base64::Engine as _;
+            let mut utf16 = Vec::new();
+            for unit in "Get-ChildItem".encode_utf16() {
+                utf16.extend_from_slice(&unit.to_le_bytes());
+            }
+            base64::engine::general_purpose::STANDARD.encode(utf16)
+        };
+        assert!(!is_dangerous_command_windows(&[
+            "powershell".to_string(),
+            "-nop".to_string(),
+            "-w".to_string(),
+            "hidden".to_string(),
+            "-EncodedCommand".to_string(),
+            encoded,
+        ]));
+    }
+
+    #[test]
+    fn powershell_full_windowstyle_name_then_encoded_remove_force_is_dangerous() {
+        // base64(UTF-16LE("Remove-Item test -Force")) behind the full flag name.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-WindowStyle",
+            "Hidden",
+            "-EncodedCommand",
+            "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAdABlAHMAdAAgAC0ARgBvAHIAYwBlAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_executionpolicy_then_encoded_url_is_dangerous() {
+        // `-ExecutionPolicy bypass` must consume `bypass`; the encoded payload
+        // after it must still be decoded and flagged.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-ExecutionPolicy",
+            "bypass",
+            "-EncodedCommand",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn powershell_unmodeled_value_flag_with_encoded_command_is_dangerous() {
+        // Backstop: even if a value-taking flag is NOT in our model list, its
+        // value lands in the positional tail followed by `-EncodedCommand <b64>`.
+        // The positional-arm backstop must fail closed rather than return the
+        // payload raw. `-SomeUnknownFlag` is intentionally not modeled.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell",
+            "-SomeUnknownFlag",
+            "value",
+            "-EncodedCommand",
+            "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
     }
 }
