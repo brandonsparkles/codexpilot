@@ -414,9 +414,26 @@ pub struct ModelsResponse {
     pub models: Vec<ModelInfo>,
 }
 
+fn is_blocked_from_model_picker(info: &ModelInfo) -> bool {
+    let slug = info.slug.to_ascii_lowercase();
+    let display_name = info.display_name.to_ascii_lowercase();
+
+    [
+        "claude-sonnet-4-5",
+        "claude-sonnet-4.5",
+        "sonnet-4-5",
+        "sonnet-4.5",
+        "sonnet 4.5",
+    ]
+    .iter()
+    .any(|blocked| slug.contains(blocked) || display_name.contains(blocked))
+}
+
 // convert ModelInfo to ModelPreset
 impl From<ModelInfo> for ModelPreset {
     fn from(info: ModelInfo) -> Self {
+        let show_in_picker =
+            info.visibility == ModelVisibility::List && !is_blocked_from_model_picker(&info);
         let supports_personality = info.supports_personality();
         ModelPreset {
             id: info.slug.clone(),
@@ -440,7 +457,7 @@ impl From<ModelInfo> for ModelPreset {
                 upgrade_copy: None,
                 migration_markdown: Some(upgrade.migration_markdown.clone()),
             }),
-            show_in_picker: info.visibility == ModelVisibility::List,
+            show_in_picker,
             availability_nux: info.availability_nux,
             supported_in_api: info.supported_in_api,
             input_modalities: info.input_modalities,
@@ -781,5 +798,19 @@ mod tests {
                 message: "Try Spark.".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn model_preset_hides_sonnet_45_from_picker() {
+        let visible = ModelPreset::from(test_model(None));
+        assert!(visible.show_in_picker);
+
+        let mut blocked = test_model(None);
+        blocked.slug = "claude-sonnet-4-5-20250929".to_string();
+        blocked.display_name = "Claude Sonnet 4.5".to_string();
+
+        let preset = ModelPreset::from(blocked);
+
+        assert!(!preset.show_in_picker);
     }
 }
