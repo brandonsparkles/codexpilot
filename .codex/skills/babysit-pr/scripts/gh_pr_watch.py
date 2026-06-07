@@ -258,7 +258,8 @@ def save_state(path, state):
 
 def default_state_file_for(pr):
     repo_slug = pr["repo"].replace("/", "-")
-    return Path(f"/tmp/codex-babysit-pr-{repo_slug}-pr{pr['number']}.json")
+    state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    return state_home / "codex-babysit-pr" / f"{repo_slug}-pr{pr['number']}.json"
 
 
 def get_pr_checks(pr_spec, repo):
