@@ -60,14 +60,15 @@ jobs:
                 permission = permissionResponse.data.permission;
               } catch (error) {
                 if (error.status === 404) {
-                  core.info(`Author ${pr.user.login} is not a collaborator; skipping #${pr.number}`);
+                  core.info(`Author ${pr.user.login} is not a collaborator; marking #${pr.number} as contributor PR`);
+                  stalePrs.push(pr);
                   continue;
                 }
                 throw error;
               }
 
-              const hasContributorAccess = ["admin", "maintain", "write"].includes(permission);
-              if (!hasContributorAccess) {
+              const hasWriteAccess = ["admin", "maintain", "write"].includes(permission);
+              if (hasWriteAccess) {
                 core.info(`Author ${pr.user.login} has ${permission} access; skipping #${pr.number}`);
                 continue;
               }

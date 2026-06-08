@@ -66,6 +66,62 @@ def _split_user_agent(user_agent: str) -> tuple[str | None, str | None]:
     return raw, None
 
 
+def _mapping_string(value: object, key: str) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    raw = value.get(key)
+    return raw if isinstance(raw, str) else None
+
+
+def _payload_string(payload: object, field_name: str, alias: str) -> str | None:
+    value = getattr(payload, field_name, None)
+    if isinstance(value, str):
+        return value
+
+    params = getattr(payload, "params", None)
+    return _mapping_string(params, alias) or _mapping_string(params, field_name)
+
+
+def _notification_thread_id(event: Notification) -> str | None:
+    return _payload_string(event.payload, "thread_id", "threadId")
+
+
+def _notification_turn_id(event: Notification) -> str | None:
+    turn_id = _payload_string(event.payload, "turn_id", "turnId")
+    if turn_id is not None:
+        return turn_id
+
+    turn = getattr(event.payload, "turn", None)
+    if turn is not None:
+        value = getattr(turn, "id", None)
+        if isinstance(value, str):
+            return value
+
+    params = getattr(event.payload, "params", None)
+    if isinstance(params, dict):
+        turn = params.get("turn")
+        return _mapping_string(turn, "id")
+
+    return None
+
+
+def _notification_matches_turn(
+    event: Notification,
+    *,
+    thread_id: str,
+    turn_id: str,
+) -> bool:
+    event_thread_id = _notification_thread_id(event)
+    if event_thread_id is not None and event_thread_id != thread_id:
+        return False
+
+    event_turn_id = _notification_turn_id(event)
+    if event_turn_id is not None and event_turn_id != turn_id:
+        return False
+
+    return True
+
+
 class Codex:
     """Minimal typed SDK surface for app-server v2."""
 
@@ -658,6 +714,12 @@ class TurnHandle:
         try:
             while True:
                 event = self._client.next_notification()
+                if not _notification_matches_turn(
+                    event,
+                    thread_id=self.thread_id,
+                    turn_id=self.id,
+                ):
+                    continue
                 yield event
                 if (
                     event.method == "turn/completed"
@@ -709,6 +771,12 @@ class AsyncTurnHandle:
         try:
             while True:
                 event = await self._codex._client.next_notification()
+                if not _notification_matches_turn(
+                    event,
+                    thread_id=self.thread_id,
+                    turn_id=self.id,
+                ):
+                    continue
                 yield event
                 if (
                     event.method == "turn/completed"
