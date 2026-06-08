@@ -312,6 +312,9 @@ starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
+# syntect's parsing feature still pulls bincode through upstream dump support.
+# Keep the advisory visible in cargo-deny; removing it requires a syntax
+# highlighting migration or an upstream syntect feature split.
 syntect = { version = "5", default-features = false, features = [
     "parsing",
     "plist-load",

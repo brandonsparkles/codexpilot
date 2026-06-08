@@ -102,6 +102,8 @@ tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 syntect = { workspace = true }
+# two-face's embedded syntax/theme bundles use syntect dump loading, so bincode
+# remains transitive until the highlighting stack changes.
 two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
