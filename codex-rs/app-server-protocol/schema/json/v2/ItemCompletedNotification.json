@@ -266,6 +266,61 @@
       ],
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HookPromptFragment": {
       "properties": {
         "hookRunId": {
@@ -683,6 +738,16 @@
                 "null"
               ]
             },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -731,6 +796,16 @@
               },
               "type": "array"
             },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -769,6 +844,16 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/McpToolCallError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
                 },
                 {
                   "type": "null"
@@ -834,6 +919,16 @@
               "type": [
                 "integer",
                 "null"
+              ]
+            },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "id": {

@@ -6067,6 +6067,7 @@ impl ChatWidget {
                 aggregated_output,
                 exit_code,
                 duration_ms,
+                guardian_approval_review: _,
             } => {
                 if matches!(
                     status,
@@ -6128,6 +6129,7 @@ impl ChatWidget {
                 id,
                 changes,
                 status,
+                guardian_approval_review: _,
             } => {
                 if !matches!(
                     status,

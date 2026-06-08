@@ -6,6 +6,9 @@ use crate::protocol::v2::CommandExecutionStatus;
 use crate::protocol::v2::DynamicToolCallOutputContentItem;
 use crate::protocol::v2::DynamicToolCallStatus;
 use crate::protocol::v2::FileUpdateChange;
+use crate::protocol::v2::GuardianApprovalReview;
+use crate::protocol::v2::GuardianApprovalReviewStatus;
+use crate::protocol::v2::GuardianRiskLevel;
 use crate::protocol::v2::McpToolCallError;
 use crate::protocol::v2::McpToolCallResult;
 use crate::protocol::v2::McpToolCallStatus;
@@ -31,6 +34,8 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::GuardianAssessmentEvent;
+use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -76,6 +81,7 @@ pub struct ThreadHistoryBuilder {
     next_item_index: i64,
     current_rollout_index: usize,
     next_rollout_index: usize,
+    pending_guardian_reviews: HashMap<String, GuardianApprovalReview>,
 }
 
 impl Default for ThreadHistoryBuilder {
@@ -92,6 +98,7 @@ impl ThreadHistoryBuilder {
             next_item_index: 1,
             current_rollout_index: 0,
             next_rollout_index: 0,
+            pending_guardian_reviews: HashMap::new(),
         }
     }
 
@@ -184,6 +191,7 @@ impl ThreadHistoryBuilder {
             EventMsg::ContextCompacted(payload) => self.handle_context_compacted(payload),
             EventMsg::EnteredReviewMode(payload) => self.handle_entered_review_mode(payload),
             EventMsg::ExitedReviewMode(payload) => self.handle_exited_review_mode(payload),
+            EventMsg::GuardianAssessment(payload) => self.handle_guardian_assessment(payload),
             EventMsg::ItemStarted(payload) => self.handle_item_started(payload),
             EventMsg::ItemCompleted(payload) => self.handle_item_completed(payload),
             EventMsg::HookStarted(_) | EventMsg::HookCompleted(_) => {}
@@ -394,6 +402,7 @@ impl ThreadHistoryBuilder {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            guardian_approval_review: None,
         };
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
@@ -425,6 +434,7 @@ impl ThreadHistoryBuilder {
             aggregated_output,
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
+            guardian_approval_review: None,
         };
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
@@ -439,6 +449,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            guardian_approval_review: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -452,6 +463,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            guardian_approval_review: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -466,6 +478,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status,
+            guardian_approval_review: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -486,6 +499,7 @@ impl ThreadHistoryBuilder {
             content_items: None,
             success: None,
             duration_ms: None,
+            guardian_approval_review: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -509,6 +523,7 @@ impl ThreadHistoryBuilder {
             content_items: Some(convert_dynamic_tool_content_items(&payload.content_items)),
             success: Some(payload.success),
             duration_ms,
+            guardian_approval_review: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -531,6 +546,7 @@ impl ThreadHistoryBuilder {
             result: None,
             error: None,
             duration_ms: None,
+            guardian_approval_review: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -570,8 +586,42 @@ impl ThreadHistoryBuilder {
             result,
             error,
             duration_ms,
+            guardian_approval_review: None,
         };
         self.upsert_item_in_current_turn(item);
+    }
+
+    fn handle_guardian_assessment(&mut self, payload: &GuardianAssessmentEvent) {
+        let review = GuardianApprovalReview {
+            status: match payload.status {
+                GuardianAssessmentStatus::InProgress => GuardianApprovalReviewStatus::InProgress,
+                GuardianAssessmentStatus::Approved => GuardianApprovalReviewStatus::Approved,
+                GuardianAssessmentStatus::Denied => GuardianApprovalReviewStatus::Denied,
+                GuardianAssessmentStatus::Aborted => GuardianApprovalReviewStatus::Aborted,
+            },
+            risk_score: payload.risk_score,
+            risk_level: payload.risk_level.map(|risk| match risk {
+                codex_protocol::approvals::GuardianRiskLevel::Low => GuardianRiskLevel::Low,
+                codex_protocol::approvals::GuardianRiskLevel::Medium => GuardianRiskLevel::Medium,
+                codex_protocol::approvals::GuardianRiskLevel::High => GuardianRiskLevel::High,
+            }),
+            rationale: payload.rationale.clone(),
+        };
+
+        let applied = if payload.turn_id.is_empty() {
+            self.update_guardian_approval_review_in_current_turn(&payload.id, review.clone())
+        } else {
+            self.update_guardian_approval_review_in_turn_id(
+                &payload.turn_id,
+                &payload.id,
+                review.clone(),
+            )
+        };
+
+        if !applied {
+            self.pending_guardian_reviews
+                .insert(payload.id.clone(), review);
+        }
     }
 
     fn handle_view_image_tool_call(&mut self, payload: &ViewImageToolCallEvent) {
@@ -1011,6 +1061,8 @@ impl ThreadHistoryBuilder {
     }
 
     fn upsert_item_in_turn_id(&mut self, turn_id: &str, item: ThreadItem) {
+        let mut item = item;
+        self.apply_pending_guardian_review(&mut item);
         if let Some(turn) = self.current_turn.as_mut()
             && turn.id == turn_id
         {
@@ -1030,8 +1082,49 @@ impl ThreadHistoryBuilder {
     }
 
     fn upsert_item_in_current_turn(&mut self, item: ThreadItem) {
+        let mut item = item;
+        self.apply_pending_guardian_review(&mut item);
         let turn = self.ensure_turn();
         upsert_turn_item(&mut turn.items, item);
+    }
+
+    fn update_guardian_approval_review_in_turn_id(
+        &mut self,
+        turn_id: &str,
+        item_id: &str,
+        review: GuardianApprovalReview,
+    ) -> bool {
+        if let Some(turn) = self.current_turn.as_mut()
+            && turn.id == turn_id
+        {
+            return update_guardian_approval_review(&mut turn.items, item_id, review);
+        }
+
+        if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
+            return update_guardian_approval_review(&mut turn.items, item_id, review);
+        }
+
+        false
+    }
+
+    fn update_guardian_approval_review_in_current_turn(
+        &mut self,
+        item_id: &str,
+        review: GuardianApprovalReview,
+    ) -> bool {
+        let turn = self.ensure_turn();
+        update_guardian_approval_review(&mut turn.items, item_id, review)
+    }
+
+    fn apply_pending_guardian_review(&mut self, item: &mut ThreadItem) {
+        let Some(review) = self.pending_guardian_reviews.remove(item.id()) else {
+            return;
+        };
+
+        if !set_guardian_approval_review(item, review.clone()) {
+            self.pending_guardian_reviews
+                .insert(item.id().to_string(), review);
+        }
     }
 
     fn next_item_id(&mut self) -> String {
@@ -1136,14 +1229,79 @@ fn format_file_change_diff(change: &codex_protocol::protocol::FileChange) -> Str
 }
 
 fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
+    let mut item = item;
     if let Some(existing_item) = items
         .iter_mut()
         .find(|existing_item| existing_item.id() == item.id())
     {
+        if item_guardian_approval_review(&item).is_none()
+            && let Some(review) = item_guardian_approval_review(existing_item).cloned()
+        {
+            set_guardian_approval_review(&mut item, review);
+        }
         *existing_item = item;
         return;
     }
     items.push(item);
+}
+
+fn update_guardian_approval_review(
+    items: &mut [ThreadItem],
+    item_id: &str,
+    review: GuardianApprovalReview,
+) -> bool {
+    let Some(item) = items.iter_mut().find(|item| item.id() == item_id) else {
+        return false;
+    };
+
+    set_guardian_approval_review(item, review)
+}
+
+fn item_guardian_approval_review(item: &ThreadItem) -> Option<&GuardianApprovalReview> {
+    match item {
+        ThreadItem::CommandExecution {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::FileChange {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::McpToolCall {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::DynamicToolCall {
+            guardian_approval_review,
+            ..
+        } => guardian_approval_review.as_ref(),
+        _ => None,
+    }
+}
+
+fn set_guardian_approval_review(item: &mut ThreadItem, review: GuardianApprovalReview) -> bool {
+    match item {
+        ThreadItem::CommandExecution {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::FileChange {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::McpToolCall {
+            guardian_approval_review,
+            ..
+        }
+        | ThreadItem::DynamicToolCall {
+            guardian_approval_review,
+            ..
+        } => {
+            *guardian_approval_review = Some(review);
+            true
+        }
+        _ => false,
+    }
 }
 
 struct PendingTurn {
@@ -1200,6 +1358,9 @@ mod tests {
     use super::*;
     use crate::protocol::v2::CommandExecutionSource;
     use codex_protocol::ThreadId;
+    use codex_protocol::approvals::GuardianAssessmentAction;
+    use codex_protocol::approvals::GuardianCommandSource;
+    use codex_protocol::approvals::GuardianRiskLevel as CoreGuardianRiskLevel;
     use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem as CoreDynamicToolCallOutputContentItem;
     use codex_protocol::items::HookPromptFragment as CoreHookPromptFragment;
     use codex_protocol::items::TurnItem as CoreTurnItem;
@@ -1865,6 +2026,7 @@ mod tests {
                 aggregated_output: Some("hello world\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(12),
+                guardian_approval_review: None,
             }
         );
         assert_eq!(
@@ -1880,6 +2042,7 @@ mod tests {
                     message: "boom".into(),
                 }),
                 duration_ms: Some(8),
+                guardian_approval_review: None,
             }
         );
     }
@@ -1939,6 +2102,7 @@ mod tests {
                 }]),
                 success: Some(true),
                 duration_ms: Some(42),
+                guardian_approval_review: None,
             }
         );
     }
@@ -2014,6 +2178,7 @@ mod tests {
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
+                guardian_approval_review: None,
             }
         );
         assert_eq!(
@@ -2026,6 +2191,7 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
+                guardian_approval_review: None,
             }
         );
     }
@@ -2109,6 +2275,74 @@ mod tests {
                 aggregated_output: Some("done\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(5),
+                guardian_approval_review: None,
+            }
+        );
+    }
+
+    #[test]
+    fn attaches_pending_guardian_assessment_to_command_item() {
+        let events = vec![
+            EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-a".into(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+            EventMsg::GuardianAssessment(GuardianAssessmentEvent {
+                id: "exec-reviewed".into(),
+                turn_id: "turn-a".into(),
+                status: GuardianAssessmentStatus::Approved,
+                risk_score: Some(18),
+                risk_level: Some(CoreGuardianRiskLevel::Low),
+                rationale: Some("Known read-only command.".into()),
+                action: GuardianAssessmentAction::Command {
+                    source: GuardianCommandSource::Shell,
+                    command: "echo reviewed".into(),
+                    cwd: PathBuf::from("/tmp"),
+                },
+            }),
+            EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                call_id: "exec-reviewed".into(),
+                process_id: Some("pid-42".into()),
+                turn_id: "turn-a".into(),
+                command: vec!["echo".into(), "reviewed".into()],
+                cwd: PathBuf::from("/tmp"),
+                parsed_cmd: vec![ParsedCommand::Unknown {
+                    cmd: "echo reviewed".into(),
+                }],
+                source: ExecCommandSource::Agent,
+                interaction_input: None,
+            }),
+        ];
+
+        let items = events
+            .into_iter()
+            .map(RolloutItem::EventMsg)
+            .collect::<Vec<_>>();
+        let turns = build_turns_from_rollout_items(&items);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].items.len(), 1);
+        assert_eq!(
+            turns[0].items[0],
+            ThreadItem::CommandExecution {
+                id: "exec-reviewed".into(),
+                command: "echo reviewed".into(),
+                cwd: PathBuf::from("/tmp"),
+                process_id: Some("pid-42".into()),
+                source: CommandExecutionSource::Agent,
+                status: CommandExecutionStatus::InProgress,
+                command_actions: vec![CommandAction::Unknown {
+                    command: "echo reviewed".into(),
+                }],
+                aggregated_output: None,
+                exit_code: None,
+                duration_ms: None,
+                guardian_approval_review: Some(GuardianApprovalReview {
+                    status: GuardianApprovalReviewStatus::Approved,
+                    risk_score: Some(18),
+                    risk_level: Some(GuardianRiskLevel::Low),
+                    rationale: Some("Known read-only command.".into()),
+                }),
             }
         );
     }
@@ -2247,6 +2481,7 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    guardian_approval_review: None,
                 },
             ]
         );
@@ -2311,6 +2546,7 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    guardian_approval_review: None,
                 },
             ]
         );

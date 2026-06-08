@@ -2746,6 +2746,16 @@
                 "null"
               ]
             },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -2794,6 +2804,16 @@
               },
               "type": "array"
             },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "id": {
               "type": "string"
             },
@@ -2832,6 +2852,16 @@
               "anyOf": [
                 {
                   "$ref": "#/definitions/McpToolCallError"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
                 },
                 {
                   "type": "null"
@@ -2897,6 +2927,16 @@
               "type": [
                 "integer",
                 "null"
+              ]
+            },
+            "guardianApprovalReview": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardianApprovalReview"
+                },
+                {
+                  "type": "null"
+                }
               ]
             },
             "id": {

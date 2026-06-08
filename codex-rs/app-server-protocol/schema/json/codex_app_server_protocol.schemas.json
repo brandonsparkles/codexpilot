@@ -12743,6 +12743,16 @@
                   "null"
                 ]
               },
+              "guardianApprovalReview": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/GuardianApprovalReview"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -12791,6 +12801,16 @@
                 },
                 "type": "array"
               },
+              "guardianApprovalReview": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/GuardianApprovalReview"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "id": {
                 "type": "string"
               },
@@ -12829,6 +12849,16 @@
                 "anyOf": [
                   {
                     "$ref": "#/definitions/v2/McpToolCallError"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "guardianApprovalReview": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/GuardianApprovalReview"
                   },
                   {
                     "type": "null"
@@ -12894,6 +12924,16 @@
                 "type": [
                   "integer",
                   "null"
+                ]
+              },
+              "guardianApprovalReview": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/GuardianApprovalReview"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
               "id": {
@@ -13774,7 +13814,7 @@
           "numTurns": {
             "description": "The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
             "format": "uint32",
-            "minimum": 1,
+            "minimum": 0.0,
             "type": "integer"
           },
           "threadId": {

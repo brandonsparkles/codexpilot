@@ -4360,6 +4360,9 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        guardian_approval_review: Option<GuardianApprovalReview>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4367,6 +4370,9 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        guardian_approval_review: Option<GuardianApprovalReview>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4381,6 +4387,9 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        guardian_approval_review: Option<GuardianApprovalReview>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4394,6 +4403,9 @@ pub enum ThreadItem {
         /// The duration of the dynamic tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        guardian_approval_review: Option<GuardianApprovalReview>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]

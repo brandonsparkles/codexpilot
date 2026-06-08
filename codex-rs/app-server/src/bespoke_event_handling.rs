@@ -548,6 +548,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             id: item_id.clone(),
                             changes: patch_changes.clone(),
                             status: PatchApplyStatus::InProgress,
+                            guardian_approval_review: None,
                         };
                         let notification = ItemStartedNotification {
                             thread_id: conversation_id.to_string(),
@@ -905,6 +906,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     content_items: None,
                     success: None,
                     duration_ms: None,
+                    guardian_approval_review: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -975,6 +977,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ),
                     success: Some(response.success),
                     duration_ms,
+                    guardian_approval_review: None,
                 };
                 let notification = ItemCompletedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1569,6 +1572,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     id: item_id.clone(),
                     changes,
                     status: PatchApplyStatus::InProgress,
+                    guardian_approval_review: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1628,6 +1632,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
+                guardian_approval_review: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1741,6 +1746,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
+                guardian_approval_review: None,
             };
 
             let notification = ItemCompletedNotification {
@@ -1985,6 +1991,7 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
+        guardian_approval_review: None,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2020,6 +2027,7 @@ async fn complete_command_execution_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
+        guardian_approval_review: None,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2798,6 +2806,7 @@ async fn construct_mcp_tool_call_notification(
         result: None,
         error: None,
         duration_ms: None,
+        guardian_approval_review: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -2844,6 +2853,7 @@ async fn construct_mcp_tool_call_end_notification(
         result,
         error,
         duration_ms,
+        guardian_approval_review: None,
     };
     ItemCompletedNotification {
         thread_id,
@@ -3604,6 +3614,7 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
+                guardian_approval_review: None,
             },
         };
 
@@ -3740,6 +3751,7 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
+                guardian_approval_review: None,
             },
         };
 
@@ -3794,6 +3806,7 @@ mod tests {
                 }),
                 error: None,
                 duration_ms: Some(0),
+                guardian_approval_review: None,
             },
         };
 
@@ -3836,6 +3849,7 @@ mod tests {
                     message: "boom".to_string(),
                 }),
                 duration_ms: Some(1),
+                guardian_approval_review: None,
             },
         };
 
