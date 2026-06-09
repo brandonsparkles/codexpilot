@@ -31,8 +31,8 @@ server_pid="$!"
 # Wait for the server to print its bound websocket URL before launching the TUI.
 for _ in $(seq 1 "$((start_timeout_seconds * 20))"); do
   if [[ -s "$stdout_log" ]]; then
-    exec_server_url="$(head -n 1 "$stdout_log" | tr -d '\r')"
-    if [[ "$exec_server_url" == ws://* ]]; then
+    exec_server_url="$(grep -m 1 -E '^wss?://' "$stdout_log" | tr -d '\r' || true)"
+    if [[ -n "$exec_server_url" ]]; then
       break
     fi
   fi

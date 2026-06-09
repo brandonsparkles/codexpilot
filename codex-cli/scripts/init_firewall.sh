@@ -31,6 +31,29 @@ iptables -t mangle -F
 iptables -t mangle -X
 ipset destroy allowed-domains 2>/dev/null || true
 
+# IPv6 is not allowlisted below, so block it explicitly instead of leaving it
+# outside the IPv4-only egress policy.
+if command -v ip6tables >/dev/null 2>&1; then
+    ip6tables -F
+    ip6tables -X
+    ip6tables -t mangle -F
+    ip6tables -t mangle -X
+    ip6tables -A INPUT -i lo -j ACCEPT
+    ip6tables -A OUTPUT -o lo -j ACCEPT
+    ip6tables -P INPUT DROP
+    ip6tables -P FORWARD DROP
+    ip6tables -P OUTPUT DROP
+else
+    if [ -d /proc/sys/net/ipv6/conf ]; then
+        sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null
+        sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null
+        if [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" != "1" ]; then
+            echo "ERROR: IPv6 is enabled but ip6tables is unavailable"
+            exit 1
+        fi
+    fi
+fi
+
 # First allow DNS and localhost before any restrictions
 # Allow outbound DNS
 iptables -A OUTPUT -p udp --dport 53 -j ACCEPT

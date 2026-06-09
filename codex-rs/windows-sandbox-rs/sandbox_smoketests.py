@@ -530,7 +530,7 @@ def main() -> int:
         shim.write_text("@echo off\r\necho stubbed\r\n", encoding="utf-8")
         env = {"PATH": f"{tools_dir};%PATH%"}
         rc, out, err = run_sbx("workspace-write", ["cmd", "/c", "ssh"], WS_ROOT, env_extra=env)
-        add("WS: PATH stub bypass denied", "stubbed" in out, f"rc={rc}, out={out}")
+        add("WS: PATH stub bypass denied", "stubbed" not in out, f"rc={rc}, out={out}")
     else:
         add("WS: PATH stub bypass denied (ssh missing)", True, "ssh not installed")
 

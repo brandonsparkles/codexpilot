@@ -10,4 +10,4 @@ summary: string,
 /**
  * Optional extra guidance, such as migration steps or rationale.
  */
-details: string | null, };
+details?: string | null, };

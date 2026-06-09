@@ -6275,6 +6275,7 @@ pub struct DeprecationNoticeNotification {
     /// Concise summary of what is deprecated.
     pub summary: String,
     /// Optional extra guidance, such as migration steps or rationale.
+    #[ts(optional = nullable)]
     pub details: Option<String>,
 }
 
@@ -6283,8 +6284,10 @@ pub struct DeprecationNoticeNotification {
 #[ts(export_to = "v2/")]
 pub struct TextPosition {
     /// 1-based line number.
+    #[schemars(range(min = 1))]
     pub line: usize,
     /// 1-based column number (in Unicode scalar values).
+    #[schemars(range(min = 1))]
     pub column: usize,
 }
 

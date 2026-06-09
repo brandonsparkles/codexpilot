@@ -114,7 +114,9 @@ def load_bazel_clippy_lints(bazelrc: Path) -> dict[str, str]:
 
         parsed_flag = parse_bazel_lint_flag(flag)
         if parsed_flag is None:
-            continue
+            raise SystemExit(
+                f"malformed Bazel clippy flag at {bazelrc}:{lineno}: {flag!r}"
+            )
 
         lint, level = parsed_flag
         if lint in parsed:

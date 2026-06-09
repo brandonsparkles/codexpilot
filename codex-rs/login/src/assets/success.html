@@ -159,7 +159,15 @@
       (function () {
         const params = new URLSearchParams(window.location.search);
         const needsSetup = params.get('needs_setup') === 'true';
-        const platformUrl = params.get('platform_url') || 'https://platform.openai.com';
+        const allowedPlatformOrigins = new Set([
+          'https://platform.openai.com',
+          'https://platform.api.openai.org',
+        ]);
+        const requestedPlatformUrl = params.get('platform_url');
+        const platformUrl =
+          requestedPlatformUrl && allowedPlatformOrigins.has(requestedPlatformUrl)
+            ? requestedPlatformUrl
+            : 'https://platform.openai.com';
         const orgId = params.get('org_id');
         const projectId = params.get('project_id');
         const planType = params.get('plan_type');
@@ -195,4 +203,3 @@
     </script>
   </body>
   </html>
-  

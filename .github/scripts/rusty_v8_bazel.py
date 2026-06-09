@@ -171,7 +171,7 @@ def merged_musl_archive(
     platform: str,
     lib_path: Path,
     compilation_mode: str = "fastbuild",
-) -> Path:
+) -> tuple[Path, Path]:
     llvm_ar = single_bazel_output_file(platform, LLVM_AR_LABEL, compilation_mode)
     llvm_ranlib = single_bazel_output_file(platform, LLVM_RANLIB_LABEL, compilation_mode)
     runtime_archives = [
@@ -190,15 +190,19 @@ def merged_musl_archive(
             "end",
         ]
     )
-    subprocess.run(
-        [str(llvm_ar), "-M"],
-        cwd=ROOT,
-        check=True,
-        input=merge_commands,
-        text=True,
-    )
-    subprocess.run([str(llvm_ranlib), str(merged_archive)], cwd=ROOT, check=True)
-    return merged_archive
+    try:
+        subprocess.run(
+            [str(llvm_ar), "-M"],
+            cwd=ROOT,
+            check=True,
+            input=merge_commands,
+            text=True,
+        )
+        subprocess.run([str(llvm_ranlib), str(merged_archive)], cwd=ROOT, check=True)
+    except Exception:
+        shutil.rmtree(temp_dir)
+        raise
+    return merged_archive, temp_dir
 
 
 def stage_release_pair(
@@ -226,21 +230,27 @@ def stage_release_pair(
     output_dir.mkdir(parents=True, exist_ok=True)
     staged_library = output_dir / staged_archive_name(target, lib_path)
     staged_binding = output_dir / f"src_binding_release_{target}.rs"
-    source_archive = (
-        merged_musl_archive(platform, lib_path, compilation_mode)
-        if is_musl_archive_target(target, lib_path)
-        else lib_path
-    )
+    temp_dir = None
+    if is_musl_archive_target(target, lib_path):
+        source_archive, temp_dir = merged_musl_archive(
+            platform, lib_path, compilation_mode
+        )
+    else:
+        source_archive = lib_path
 
-    with source_archive.open("rb") as src, staged_library.open("wb") as dst:
-        with gzip.GzipFile(
-            filename="",
-            mode="wb",
-            fileobj=dst,
-            compresslevel=6,
-            mtime=0,
-        ) as gz:
-            shutil.copyfileobj(src, gz)
+    try:
+        with source_archive.open("rb") as src, staged_library.open("wb") as dst:
+            with gzip.GzipFile(
+                filename="",
+                mode="wb",
+                fileobj=dst,
+                compresslevel=6,
+                mtime=0,
+            ) as gz:
+                shutil.copyfileobj(src, gz)
+    finally:
+        if temp_dir is not None:
+            shutil.rmtree(temp_dir)
 
     shutil.copyfile(binding_path, staged_binding)
 
