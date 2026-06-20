@@ -73,6 +73,7 @@ ignore = [
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; pulled in via starlark_map/starlark v0.13.0 used by execpolicy/cli/core; no fixed release yet" },
     { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; pulled in via ratatui/rmcp/starlark used by tui/execpolicy; no fixed release yet" },
+    { id = "RUSTSEC-2025-0141", reason = "bincode is unmaintained (informational, not a vulnerability); transitive via syntect v5.3.0 -> codex-tui; bincode 1.3.3 has no safe upgrade (dev ceased) — real fix is upstream syntect migrating off bincode" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
