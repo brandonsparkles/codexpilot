@@ -1,11 +1,13 @@
 use crate::bash::parse_shell_lc_plain_commands;
 use std::path::Path;
-// TEMP-HOST-TEST: cfg(windows) removed to run windows_dangerous_commands tests on host
+// Windows-only at runtime; also compiled for `cfg(test)` so the module's own
+// tests run on any host.
+#[cfg(any(windows, test))]
 #[path = "windows_dangerous_commands.rs"]
 mod windows_dangerous_commands;
 
 pub fn command_might_be_dangerous(command: &[String]) -> bool {
-    // TEMP-HOST-TEST: cfg(windows) removed
+    #[cfg(windows)]
     {
         if windows_dangerous_commands::is_dangerous_command_windows(command) {
             return true;
