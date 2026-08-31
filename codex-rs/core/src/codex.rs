@@ -2498,15 +2498,34 @@ impl Session {
             return None;
         }
 
-        let provider = session_configuration.provider.clone();
-        let models_manager = ModelsManager::new_with_provider(
-            config.codex_home.clone(),
-            Arc::clone(&self.services.auth_manager),
-            config.model_catalog.clone(),
-            CollaborationModesConfig::default(),
-            config.model_provider_id.clone(),
-            provider,
-        );
+        // `services.models_manager` is shared across threads and bound to the
+        // spawn-time provider, which may not match this session's provider, so
+        // resolution uses a session-scoped manager instead. It is built once
+        // and cached in `SessionState` keyed by provider id (the only
+        // construction input that can change mid-session), so a provider
+        // switch rebuilds it rather than reusing a stale binding.
+        let cached_manager = {
+            let state = self.state.lock().await;
+            state.auto_resolution_models_manager(&config.model_provider_id)
+        };
+        let models_manager = match cached_manager {
+            Some(manager) => manager,
+            None => {
+                let manager = Arc::new(ModelsManager::new_with_provider(
+                    config.codex_home.clone(),
+                    Arc::clone(&self.services.auth_manager),
+                    config.model_catalog.clone(),
+                    CollaborationModesConfig::default(),
+                    config.model_provider_id.clone(),
+                    session_configuration.provider.clone(),
+                ));
+                self.state.lock().await.set_auto_resolution_models_manager(
+                    config.model_provider_id.clone(),
+                    Arc::clone(&manager),
+                );
+                manager
+            }
+        };
 
         let available_models = models_manager
             .list_models(RefreshStrategy::OnlineIfUncached)

@@ -1,10 +1,12 @@
 //! Session-wide mutable state.
 
+use codex_models_manager::manager::ModelsManager;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
 use codex_sandboxing::policy_transforms::merge_permission_profiles;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::codex::PreviousTurnSettings;
 use crate::codex::SessionConfiguration;
@@ -37,6 +39,11 @@ pub(crate) struct SessionState {
     /// alias (e.g. GitHub Copilot `auto`). Used to emit the resolved model to the
     /// UI exactly once per change rather than on every turn.
     announced_auto_resolution: Option<String>,
+    /// Session-scoped `ModelsManager` used to resolve provider auto-routing
+    /// aliases, keyed by the provider id it was built for so a mid-session
+    /// provider switch rebuilds it. Cached here so resolution does not
+    /// construct a fresh manager on every turn.
+    auto_resolution_models_manager: Option<(String, Arc<ModelsManager>)>,
 }
 
 impl SessionState {
@@ -56,6 +63,7 @@ impl SessionState {
             pending_session_start_source: None,
             granted_permissions: None,
             announced_auto_resolution: None,
+            auto_resolution_models_manager: None,
         }
     }
 
@@ -67,6 +75,27 @@ impl SessionState {
     /// Records the concrete model announced for an auto-routing alias.
     pub(crate) fn set_announced_auto_resolution(&mut self, model: Option<String>) {
         self.announced_auto_resolution = model;
+    }
+
+    /// Returns the cached session-scoped models manager used for auto-routing
+    /// alias resolution, if one was built for `provider_id`.
+    pub(crate) fn auto_resolution_models_manager(
+        &self,
+        provider_id: &str,
+    ) -> Option<Arc<ModelsManager>> {
+        self.auto_resolution_models_manager
+            .as_ref()
+            .filter(|(cached_provider_id, _)| cached_provider_id == provider_id)
+            .map(|(_, manager)| Arc::clone(manager))
+    }
+
+    /// Caches the session-scoped models manager built for `provider_id`.
+    pub(crate) fn set_auto_resolution_models_manager(
+        &mut self,
+        provider_id: String,
+        manager: Arc<ModelsManager>,
+    ) {
+        self.auto_resolution_models_manager = Some((provider_id, manager));
     }
 
     // History helpers
