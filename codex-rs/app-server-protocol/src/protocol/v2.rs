@@ -3008,6 +3008,7 @@ pub struct ThreadRollbackParams {
     ///
     /// This only modifies the thread's history and does not revert local file changes
     /// that have been made by the agent. Clients are responsible for reverting these changes.
+    #[schemars(range(min = 1))]
     pub num_turns: u32,
 }
 
