@@ -609,16 +609,12 @@ impl ThreadHistoryBuilder {
         };
 
         let applied = if payload.turn_id.is_empty() {
-            self.update_guardian_approval_review_in_current_turn(&payload.id, review.clone())
+            self.update_guardian_approval_review_in_current_turn(&payload.id, review)
         } else {
-            self.update_guardian_approval_review_in_turn_id(
-                &payload.turn_id,
-                &payload.id,
-                review.clone(),
-            )
+            self.update_guardian_approval_review_in_turn_id(&payload.turn_id, &payload.id, review)
         };
 
-        if !applied {
+        if let Err(review) = applied {
             self.pending_guardian_reviews
                 .insert(payload.id.clone(), review);
         }
@@ -1093,7 +1089,7 @@ impl ThreadHistoryBuilder {
         turn_id: &str,
         item_id: &str,
         review: GuardianApprovalReview,
-    ) -> bool {
+    ) -> Result<(), GuardianApprovalReview> {
         if let Some(turn) = self.current_turn.as_mut()
             && turn.id == turn_id
         {
@@ -1104,14 +1100,14 @@ impl ThreadHistoryBuilder {
             return update_guardian_approval_review(&mut turn.items, item_id, review);
         }
 
-        false
+        Err(review)
     }
 
     fn update_guardian_approval_review_in_current_turn(
         &mut self,
         item_id: &str,
         review: GuardianApprovalReview,
-    ) -> bool {
+    ) -> Result<(), GuardianApprovalReview> {
         let turn = self.ensure_turn();
         update_guardian_approval_review(&mut turn.items, item_id, review)
     }
@@ -1121,7 +1117,7 @@ impl ThreadHistoryBuilder {
             return;
         };
 
-        if !set_guardian_approval_review(item, review.clone()) {
+        if let Err(review) = set_guardian_approval_review(item, review) {
             self.pending_guardian_reviews
                 .insert(item.id().to_string(), review);
         }
@@ -1237,7 +1233,7 @@ fn upsert_turn_item(items: &mut Vec<ThreadItem>, item: ThreadItem) {
         if item_guardian_approval_review(&item).is_none()
             && let Some(review) = item_guardian_approval_review(existing_item).cloned()
         {
-            set_guardian_approval_review(&mut item, review);
+            let _ = set_guardian_approval_review(&mut item, review);
         }
         *existing_item = item;
         return;
@@ -1249,9 +1245,9 @@ fn update_guardian_approval_review(
     items: &mut [ThreadItem],
     item_id: &str,
     review: GuardianApprovalReview,
-) -> bool {
+) -> Result<(), GuardianApprovalReview> {
     let Some(item) = items.iter_mut().find(|item| item.id() == item_id) else {
-        return false;
+        return Err(review);
     };
 
     set_guardian_approval_review(item, review)
@@ -1279,7 +1275,10 @@ fn item_guardian_approval_review(item: &ThreadItem) -> Option<&GuardianApprovalR
     }
 }
 
-fn set_guardian_approval_review(item: &mut ThreadItem, review: GuardianApprovalReview) -> bool {
+fn set_guardian_approval_review(
+    item: &mut ThreadItem,
+    review: GuardianApprovalReview,
+) -> Result<(), GuardianApprovalReview> {
     match item {
         ThreadItem::CommandExecution {
             guardian_approval_review,
@@ -1298,9 +1297,9 @@ fn set_guardian_approval_review(item: &mut ThreadItem, review: GuardianApprovalR
             ..
         } => {
             *guardian_approval_review = Some(review);
-            true
+            Ok(())
         }
-        _ => false,
+        _ => Err(review),
     }
 }
 
@@ -2344,6 +2343,99 @@ mod tests {
                     rationale: Some("Known read-only command.".into()),
                 }),
             }
+        );
+    }
+
+    #[test]
+    fn moves_guardian_review_into_current_and_finished_turns() {
+        let mut builder = ThreadHistoryBuilder::new();
+        builder.ensure_turn().id = "turn-a".into();
+        builder.upsert_item_in_current_turn(ThreadItem::FileChange {
+            id: "patch-reviewed".into(),
+            changes: Vec::new(),
+            status: PatchApplyStatus::InProgress,
+            guardian_approval_review: None,
+        });
+
+        for finished in [false, true] {
+            if finished {
+                builder.finish_current_turn();
+            }
+            let review = GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Approved,
+                risk_score: Some(18),
+                risk_level: Some(GuardianRiskLevel::Low),
+                rationale: Some("Known patch.".into()),
+            };
+            let rationale_ptr = review.rationale.as_ref().unwrap().as_ptr();
+            let result = if finished {
+                builder.update_guardian_approval_review_in_turn_id(
+                    "turn-a",
+                    "patch-reviewed",
+                    review,
+                )
+            } else {
+                builder.update_guardian_approval_review_in_current_turn("patch-reviewed", review)
+            };
+            assert_eq!(result, Ok(()));
+            let item = if finished {
+                &builder.turns[0].items[0]
+            } else {
+                &builder.current_turn.as_ref().unwrap().items[0]
+            };
+            assert_eq!(
+                item_guardian_approval_review(item)
+                    .unwrap()
+                    .rationale
+                    .as_ref()
+                    .unwrap()
+                    .as_ptr(),
+                rationale_ptr
+            );
+        }
+    }
+
+    #[test]
+    fn pending_guardian_review_survives_unsupported_item_and_turn_boundary() {
+        let mut builder = ThreadHistoryBuilder::new();
+        let review = GuardianApprovalReview {
+            status: GuardianApprovalReviewStatus::Approved,
+            risk_score: None,
+            risk_level: None,
+            rationale: Some("Known patch.".into()),
+        };
+        let rationale_ptr = review.rationale.as_ref().unwrap().as_ptr();
+        let review = builder
+            .update_guardian_approval_review_in_turn_id("turn-a", "patch-reviewed", review)
+            .unwrap_err();
+        builder
+            .pending_guardian_reviews
+            .insert("patch-reviewed".into(), review);
+        builder.ensure_turn().id = "turn-a".into();
+        builder.upsert_item_in_current_turn(ThreadItem::ImageView {
+            id: "patch-reviewed".into(),
+            path: "/tmp/image.png".into(),
+        });
+        assert_eq!(builder.pending_guardian_reviews.len(), 1);
+        builder.finish_current_turn();
+        builder.upsert_item_in_turn_id(
+            "turn-a",
+            ThreadItem::FileChange {
+                id: "patch-reviewed".into(),
+                changes: Vec::new(),
+                status: PatchApplyStatus::InProgress,
+                guardian_approval_review: None,
+            },
+        );
+        assert!(builder.pending_guardian_reviews.is_empty());
+        assert_eq!(
+            item_guardian_approval_review(&builder.turns[0].items[0])
+                .unwrap()
+                .rationale
+                .as_ref()
+                .unwrap()
+                .as_ptr(),
+            rationale_ptr
         );
     }
 
