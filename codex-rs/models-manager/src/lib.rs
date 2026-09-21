@@ -4,6 +4,7 @@ pub mod config;
 pub mod manager;
 pub mod model_info;
 pub mod model_presets;
+pub mod picker_blocklist;
 
 use serde::Deserialize;
 use std::sync::OnceLock;

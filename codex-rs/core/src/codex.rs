@@ -440,6 +440,12 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
+/// Provider whose `auto` alias is resolved per turn by the provider itself,
+/// so a server/requested model mismatch is routine routing rather than a
+/// security reroute.
+const GITHUB_COPILOT_PROVIDER_ID: &str = "github-copilot";
+/// Provider-side alias that means "pick a concrete model for me".
+const AUTO_MODEL_ALIAS: &str = "auto";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -2492,8 +2498,8 @@ impl Session {
         session_configuration: &SessionConfiguration,
     ) -> Option<String> {
         let config = Arc::clone(&session_configuration.original_config_do_not_use);
-        if config.model_provider_id != "github-copilot"
-            || session_configuration.collaboration_mode.model() != "auto"
+        if config.model_provider_id != GITHUB_COPILOT_PROVIDER_ID
+            || session_configuration.collaboration_mode.model() != AUTO_MODEL_ALIAS
         {
             return None;
         }
@@ -3754,17 +3760,32 @@ impl Session {
 
         warn!("server reported model {server_model} while requested model was {requested_model}");
 
+        // Only GitHub Copilot resolves `auto` to a different concrete model per
+        // turn; that mismatch is normal routing. Keying on the alias alone
+        // would also suppress a genuine high-risk-cyber reroute on an
+        // OpenAI-provider session that happens to request `auto`, and would
+        // label every routine Copilot resolution as a security event.
+        let is_provider_auto_resolution = turn_context.config.model_provider_id
+            == GITHUB_COPILOT_PROVIDER_ID
+            && requested_model_normalized == AUTO_MODEL_ALIAS;
+
+        let reason = if is_provider_auto_resolution {
+            ModelRerouteReason::AutoModelSelection
+        } else {
+            ModelRerouteReason::HighRiskCyberActivity
+        };
+
         self.send_event(
             turn_context,
             EventMsg::ModelReroute(ModelRerouteEvent {
                 from_model: requested_model.clone(),
                 to_model: server_model.clone(),
-                reason: ModelRerouteReason::HighRiskCyberActivity,
+                reason,
             }),
         )
         .await;
 
-        if requested_model_normalized == "auto" {
+        if is_provider_auto_resolution {
             return true;
         }
 

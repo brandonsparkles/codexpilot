@@ -3,6 +3,7 @@ use crate::collaboration_mode_presets::CollaborationModesConfig;
 use crate::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::config::ModelsManagerConfig;
 use crate::model_info;
+use crate::picker_blocklist::PickerBlocklist;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
@@ -186,6 +187,9 @@ pub struct ModelsManager {
     cache_manager: ModelsCacheManager,
     provider_id: String,
     provider: ModelProviderInfo,
+    /// Fork-local picker filter, resolved once at construction. Scoped to
+    /// the GitHub Copilot provider; empty for every other provider.
+    picker_blocklist: PickerBlocklist,
 }
 
 impl ModelsManager {
@@ -238,6 +242,10 @@ impl ModelsManager {
             auth_manager,
             etag: RwLock::new(None),
             cache_manager,
+            picker_blocklist: PickerBlocklist::for_provider(
+                &provider_id,
+                GITHUB_COPILOT_PROVIDER_ID,
+            ),
             provider_id,
             provider,
         }
@@ -614,6 +622,10 @@ impl ModelsManager {
         let mut presets: Vec<ModelPreset> = remote_models.into_iter().map(Into::into).collect();
         let chatgpt_mode = matches!(self.auth_manager.auth_mode(), Some(AuthMode::Chatgpt));
         presets = ModelPreset::filter_by_auth(presets, chatgpt_mode);
+        // Before the default is recomputed: `mark_default_by_picker_visibility`
+        // picks the first picker-visible preset, so a blocked model must
+        // already be hidden or it could be selected as the default.
+        self.picker_blocklist.apply(&mut presets);
 
         ModelPreset::mark_default_by_picker_visibility(&mut presets);
         self.apply_default_model_override(&mut presets);
