@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import uuid
+import warnings
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,6 +134,12 @@ class AppServerConfig:
     experimental_api: bool = True
 
 
+#: Maximum notifications parked for an inactive turn before the oldest are
+#: dropped. Sized well above any realistic single-turn event count so a normal
+#: interleaving never trips it; it exists as a leak ceiling, not as a policy.
+_TURN_OVERFLOW_MAXLEN = 10_000
+
+
 class AppServerClient:
     """Synchronous typed JSON-RPC client for `codex app-server` over stdio."""
 
@@ -149,10 +156,18 @@ class AppServerClient:
         self._active_turn_consumer: str | None = None
         self._pending_notifications: deque[Notification] = deque()
         # Notifications consumed by one turn's stream() that belong to another
-        # turn. Parked here (never silently dropped) and restored to the front
-        # of _pending_notifications when the active consumer releases, so a
-        # later turn still sees its own events — including turn/completed.
-        self._turn_overflow: list[Notification] = []
+        # turn. Parked here and restored to the front of _pending_notifications
+        # when the active consumer releases, so a later turn still sees its own
+        # events — including turn/completed.
+        #
+        # Bounded: an unbounded list grows for as long as a stream() runs while
+        # some other turn keeps emitting, which on a long agent run is an
+        # unbounded memory leak in a client library. The oldest parked events
+        # are discarded first, and the drop is COUNTED and surfaced as a
+        # RuntimeWarning on release rather than being silent — a dropped
+        # turn/completed is exactly the kind of loss that hangs a later stream().
+        self._turn_overflow: deque[Notification] = deque(maxlen=_TURN_OVERFLOW_MAXLEN)
+        self._turn_overflow_dropped = 0
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._stderr_thread: threading.Thread | None = None
 
@@ -302,20 +317,38 @@ class AppServerClient:
             self._active_turn_consumer = turn_id
 
     def release_turn_consumer(self, turn_id: str) -> None:
+        dropped = 0
         with self._turn_consumer_lock:
             if self._active_turn_consumer == turn_id:
                 self._active_turn_consumer = None
                 for event in reversed(self._turn_overflow):
                     self._pending_notifications.appendleft(event)
                 self._turn_overflow.clear()
+                dropped, self._turn_overflow_dropped = self._turn_overflow_dropped, 0
+        if dropped:
+            warnings.warn(
+                f"Dropped {dropped} parked notification(s) for other turns while streaming "
+                f"turn {turn_id!r}: the overflow buffer is capped at {_TURN_OVERFLOW_MAXLEN}. "
+                "A later stream() may hang waiting for an event that was discarded.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
     def stash_turn_notification(self, event: Notification) -> None:
         """Park a notification that arrived while another turn was streaming.
 
         Called by TurnHandle.stream() for events that do not match its turn
         instead of dropping them; release_turn_consumer() restores them.
+
+        Takes _turn_consumer_lock: release_turn_consumer() drains and clears the
+        same buffer under that lock, so an unsynchronized append here could land
+        between the drain and the clear and be thrown away. The lock is not
+        reentrant, and stream() calls this while holding nothing.
         """
-        self._turn_overflow.append(event)
+        with self._turn_consumer_lock:
+            if len(self._turn_overflow) == _TURN_OVERFLOW_MAXLEN:
+                self._turn_overflow_dropped += 1
+            self._turn_overflow.append(event)
 
     def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
         return self.request("thread/start", _params_dict(params), response_model=ThreadStartResponse)

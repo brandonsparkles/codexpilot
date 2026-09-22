@@ -537,17 +537,6 @@ fn parse_powershell_invocation(args: &[String]) -> Option<ParsedPowershell> {
     None
 }
 
-/// True if `lower` (an already-lowercased argv token) names a PowerShell switch
-/// that consumes the NEXT argv token as its value. PowerShell resolves any
-/// unambiguous prefix of a parameter name, so we match prefixes too (e.g. `-w`
-/// for `-WindowStyle`, `-ex`/`-exec` for `-ExecutionPolicy`).
-///
-/// Modeling these is a security requirement: an unmodeled value-taking flag lets
-/// its value slip into the positional stream, which can carry an undecoded
-/// `-EncodedCommand <b64>` past inspection. The positional-arm backstop in
-/// `parse_powershell_invocation` covers any flag missed here, but keeping this
-/// list complete lets benign invocations (e.g. `-w hidden -EncodedCommand
-/// <benign>`) still decode and pass through normally instead of failing closed.
 /// True if `lower` names PowerShell's `-File` parameter (or any unambiguous
 /// prefix of it, e.g. `-f`, `-fi`). `-File` is excluded from the generic
 /// value-taking handling because its value is the script to run, not an
@@ -564,6 +553,17 @@ fn is_file_flag(lower: &str) -> bool {
     "file".starts_with(rest)
 }
 
+/// True if `lower` (an already-lowercased argv token) names a PowerShell switch
+/// that consumes the NEXT argv token as its value. PowerShell resolves any
+/// unambiguous prefix of a parameter name, so we match prefixes too (e.g. `-w`
+/// for `-WindowStyle`, `-ex`/`-exec` for `-ExecutionPolicy`).
+///
+/// Modeling these is a security requirement: an unmodeled value-taking flag lets
+/// its value slip into the positional stream, which can carry an undecoded
+/// `-EncodedCommand <b64>` past inspection. The positional-arm backstop in
+/// `parse_powershell_invocation` covers any flag missed here, but keeping this
+/// list complete lets benign invocations (e.g. `-w hidden -EncodedCommand
+/// <benign>`) still decode and pass through normally instead of failing closed.
 fn is_value_taking_flag(lower: &str) -> bool {
     let Some(rest) = lower.strip_prefix('-').or_else(|| lower.strip_prefix('/')) else {
         return false;

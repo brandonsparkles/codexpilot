@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import codex_app_server.api as public_api_module
+import codex_app_server.client as client_module
 from codex_app_server.client import AppServerClient
 from codex_app_server.generated.v2_all import (
     AgentMessageDeltaNotification,
@@ -297,6 +298,38 @@ def test_async_turn_stream_rejects_second_active_consumer() -> None:
         await first_stream.aclose()
 
     asyncio.run(scenario())
+
+
+def test_turn_overflow_is_bounded_and_reports_drops() -> None:
+    """The parked-notification buffer is a leak ceiling, and a drop is not silent."""
+    client = AppServerClient()
+    maxlen = client_module._TURN_OVERFLOW_MAXLEN
+
+    client.acquire_turn_consumer("turn-1")
+    for _ in range(maxlen + 3):
+        client.stash_turn_notification(_completed_notification(turn_id="turn-other"))
+
+    assert len(client._turn_overflow) == maxlen, "overflow buffer must not grow past its cap"
+
+    with pytest.warns(RuntimeWarning, match="Dropped 3 parked notification"):
+        client.release_turn_consumer("turn-1")
+
+    assert len(client._pending_notifications) == maxlen, "parked events are restored, not lost"
+    assert client._turn_overflow_dropped == 0, "drop counter resets after it is reported"
+
+
+def test_turn_overflow_restores_parked_events_in_order() -> None:
+    client = AppServerClient()
+    first = _completed_notification(turn_id="turn-a")
+    second = _completed_notification(turn_id="turn-b")
+
+    client.acquire_turn_consumer("turn-1")
+    client.stash_turn_notification(first)
+    client.stash_turn_notification(second)
+    client.release_turn_consumer("turn-1")
+
+    assert list(client._pending_notifications) == [first, second]
+    assert client._turn_overflow_dropped == 0
 
 
 def test_turn_run_returns_completed_turn_payload() -> None:
