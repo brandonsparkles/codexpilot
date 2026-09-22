@@ -148,6 +148,11 @@ class AppServerClient:
         self._turn_consumer_lock = threading.Lock()
         self._active_turn_consumer: str | None = None
         self._pending_notifications: deque[Notification] = deque()
+        # Notifications consumed by one turn's stream() that belong to another
+        # turn. Parked here (never silently dropped) and restored to the front
+        # of _pending_notifications when the active consumer releases, so a
+        # later turn still sees its own events — including turn/completed.
+        self._turn_overflow: list[Notification] = []
         self._stderr_lines: deque[str] = deque(maxlen=400)
         self._stderr_thread: threading.Thread | None = None
 
@@ -300,6 +305,17 @@ class AppServerClient:
         with self._turn_consumer_lock:
             if self._active_turn_consumer == turn_id:
                 self._active_turn_consumer = None
+                for event in reversed(self._turn_overflow):
+                    self._pending_notifications.appendleft(event)
+                self._turn_overflow.clear()
+
+    def stash_turn_notification(self, event: Notification) -> None:
+        """Park a notification that arrived while another turn was streaming.
+
+        Called by TurnHandle.stream() for events that do not match its turn
+        instead of dropping them; release_turn_consumer() restores them.
+        """
+        self._turn_overflow.append(event)
 
     def thread_start(self, params: V2ThreadStartParams | JsonObject | None = None) -> ThreadStartResponse:
         return self.request("thread/start", _params_dict(params), response_model=ThreadStartResponse)

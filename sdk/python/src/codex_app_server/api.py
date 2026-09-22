@@ -710,6 +710,7 @@ class TurnHandle:
 
     def stream(self) -> Iterator[Notification]:
         # TODO: replace this client-wide experimental guard with per-turn event demux.
+        # Non-matching events are parked (not dropped) and restored on release.
         self._client.acquire_turn_consumer(self.id)
         try:
             while True:
@@ -719,6 +720,7 @@ class TurnHandle:
                     thread_id=self.thread_id,
                     turn_id=self.id,
                 ):
+                    self._client.stash_turn_notification(event)
                     continue
                 yield event
                 if (
@@ -767,6 +769,7 @@ class AsyncTurnHandle:
     async def stream(self) -> AsyncIterator[Notification]:
         await self._codex._ensure_initialized()
         # TODO: replace this client-wide experimental guard with per-turn event demux.
+        # Non-matching events are parked (not dropped) and restored on release.
         self._codex._client.acquire_turn_consumer(self.id)
         try:
             while True:
@@ -776,6 +779,7 @@ class AsyncTurnHandle:
                     thread_id=self.thread_id,
                     turn_id=self.id,
                 ):
+                    self._codex._client.stash_turn_notification(event)
                     continue
                 yield event
                 if (

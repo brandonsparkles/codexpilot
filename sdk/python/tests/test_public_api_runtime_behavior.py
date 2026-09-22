@@ -246,6 +246,27 @@ def test_turn_stream_rejects_second_active_consumer() -> None:
     first_stream.close()
 
 
+def test_turn_stream_parks_other_turn_notifications() -> None:
+    client = AppServerClient()
+    notifications: deque[Notification] = deque(
+        [
+            _delta_notification(turn_id="turn-2", text="other-delta"),
+            _completed_notification(turn_id="turn-2"),
+            _delta_notification(turn_id="turn-1", text="mine"),
+            _completed_notification(turn_id="turn-1"),
+        ]
+    )
+    client.next_notification = notifications.popleft  # type: ignore[method-assign]
+
+    events = list(TurnHandle(client, "thread-1", "turn-1").stream())
+    assert [e.method for e in events] == ["item/agentMessage/delta", "turn/completed"]
+
+    # The other turn's events were parked, not dropped, and restored in order.
+    restored = list(client._pending_notifications)
+    assert [e.method for e in restored] == ["item/agentMessage/delta", "turn/completed"]
+    assert restored[0].payload.turn_id == "turn-2"  # type: ignore[union-attr]
+
+
 def test_async_turn_stream_rejects_second_active_consumer() -> None:
     async def scenario() -> None:
         codex = AsyncCodex()
