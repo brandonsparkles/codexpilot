@@ -490,6 +490,7 @@ async fn mcp_image_output_preserves_image_and_no_text_summary() -> Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,

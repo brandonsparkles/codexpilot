@@ -53,6 +53,7 @@ async fn submit_turn_with_policies(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            model_provider: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

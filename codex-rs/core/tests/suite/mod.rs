@@ -15,7 +15,8 @@ struct TestCodexAliasesGuard {
     _previous_codex_home: Option<OsString>,
 }
 
-const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
+// This fork resolves its home from CODEXPILOT_HOME, not CODEX_HOME.
+const CODEX_HOME_ENV_VAR: &str = "CODEXPILOT_HOME";
 
 // This code runs before any other tests are run.
 // It allows the test binary to behave like codex and dispatch to apply_patch and codex-linux-sandbox

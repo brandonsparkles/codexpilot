@@ -1305,6 +1305,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
             diff: "new line\n".to_string(),
         }],
         status: PatchApplyStatus::InProgress,
+        guardian_approval_review: None,
     };
     assert_eq!(original_started, expected_file_change);
 

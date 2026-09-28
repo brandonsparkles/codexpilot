@@ -602,7 +602,7 @@ impl AuthModeWidget {
         ];
         if let Some(code) = state.user_code.as_deref() {
             lines.push("  Enter this one-time code:".into());
-            lines.push(Line::from(vec!["  ".into(), code.bold().yellow()]));
+            lines.push(Line::from(vec!["  ".into(), code.bold().cyan()]));
             lines.push("".into());
         } else {
             lines.push("  Requesting a device code…".dim().into());

@@ -913,6 +913,7 @@ fn command_execution_completed_event(turn_id: &str, item: &ThreadItem) -> Option
         aggregated_output,
         exit_code,
         duration_ms,
+        guardian_approval_review: _,
     } = item
     else {
         return None;
@@ -1140,6 +1141,7 @@ mod tests {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            guardian_approval_review: None,
         };
 
         let (_, started_events) = server_notification_thread_events(
@@ -1196,6 +1198,7 @@ mod tests {
             aggregated_output: Some("hello world\n".to_string()),
             exit_code: Some(0),
             duration_ms: Some(5),
+            guardian_approval_review: None,
         };
         let (_, completed_events) = server_notification_thread_events(
             ServerNotification::ItemCompleted(ItemCompletedNotification {
@@ -1231,6 +1234,7 @@ mod tests {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            guardian_approval_review: None,
         };
 
         let events =
@@ -1281,6 +1285,7 @@ mod tests {
                     aggregated_output: Some("hello world\n".to_string()),
                     exit_code: Some(0),
                     duration_ms: Some(5),
+                    guardian_approval_review: None,
                 }],
                 status: TurnStatus::Completed,
                 error: None,

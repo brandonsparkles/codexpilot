@@ -162,6 +162,11 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(app_home);
         cmd.env(home_env_var, app_home);
+        // Every binary in this fork resolves its home from CODEXPILOT_HOME
+        // (`codex_utils_home_dir::current_app_home` is hard-wired to CodexPilot),
+        // so a child launched with only CODEX_HOME would fall back to the
+        // developer's real ~/.codexpilot. Always pin it to the test home.
+        cmd.env("CODEXPILOT_HOME", app_home);
         cmd.env("RUST_LOG", "info");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
         cmd.args(args);

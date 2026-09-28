@@ -2215,7 +2215,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort,
             developer_instructions: None,
         },
@@ -2223,6 +2223,7 @@ async fn set_rate_limits_retains_previous_credits() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -2316,7 +2317,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort,
             developer_instructions: None,
         },
@@ -2324,6 +2325,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -2663,7 +2665,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort,
             developer_instructions: None,
         },
@@ -2672,6 +2674,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
     SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -2929,7 +2932,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort: config.model_reasoning_effort,
             developer_instructions: None,
         },
@@ -2937,6 +2940,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3029,7 +3033,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort,
             developer_instructions: None,
         },
@@ -3037,6 +3041,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),
@@ -3871,7 +3876,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let collaboration_mode = CollaborationMode {
         mode: ModeKind::Default,
         settings: Settings {
-            model,
+            model: model.clone(),
             reasoning_effort,
             developer_instructions: None,
         },
@@ -3879,6 +3884,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        requested_model: model,
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         user_instructions: config.user_instructions.clone(),

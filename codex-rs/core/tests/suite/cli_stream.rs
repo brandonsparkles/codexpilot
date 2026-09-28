@@ -53,6 +53,7 @@ async fn responses_mode_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -113,6 +114,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_env_fallback() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -149,6 +151,7 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -205,6 +208,7 @@ async fn exec_cli_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
@@ -275,6 +279,7 @@ async fn exec_cli_profile_applies_model_instructions_file() {
         .arg(&repo_root)
         .arg("hello?\n");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
@@ -321,6 +326,7 @@ async fn responses_api_stream_cli() {
         .arg(&repo_root)
         .arg("hello?");
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", fixture);
 
@@ -358,6 +364,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg(&repo_root)
         .arg(&prompt);
     cmd.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env(CODEX_API_KEY_ENV_VAR, "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture);
 
@@ -481,6 +488,7 @@ async fn integration_creates_and_checks_session_file() -> anyhow::Result<()> {
         .arg("resume")
         .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
+        .env("CODEXPILOT_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture);
 

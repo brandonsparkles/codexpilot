@@ -274,6 +274,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         content_items,
         success,
         duration_ms,
+        guardian_approval_review: _,
     } = started.item
     else {
         panic!("expected dynamic tool call item");
@@ -327,6 +328,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         content_items,
         success,
         duration_ms,
+        guardian_approval_review: _,
     } = completed.item
     else {
         panic!("expected dynamic tool call item");

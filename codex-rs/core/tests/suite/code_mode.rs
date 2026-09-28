@@ -2334,6 +2334,7 @@ text(
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model_provider: None,
             model: test.session_configured.model.clone(),
             effort: None,
             summary: None,

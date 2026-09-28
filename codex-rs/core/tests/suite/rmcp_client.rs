@@ -132,6 +132,7 @@ async fn stdio_server_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -303,6 +304,7 @@ async fn stdio_image_responses_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -508,6 +510,7 @@ async fn stdio_image_responses_are_sanitized_for_text_only_model() -> anyhow::Re
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: text_only_model_slug.to_string(),
             effort: None,
             summary: None,
@@ -624,6 +627,7 @@ async fn stdio_server_propagates_whitelisted_env_vars() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -787,6 +791,7 @@ async fn streamable_http_tool_call_round_trip() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,
@@ -951,6 +956,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
 
     let temp_home = Arc::new(tempdir()?);
     let _codex_home_guard = EnvVarGuard::set("CODEX_HOME", temp_home.path().as_os_str());
+    let _codexpilot_home_guard = EnvVarGuard::set("CODEXPILOT_HOME", temp_home.path().as_os_str());
     write_fallback_oauth_tokens(
         temp_home.path(),
         server_name,
@@ -1035,6 +1041,7 @@ async fn streamable_http_with_oauth_round_trip_impl() -> anyhow::Result<()> {
             approval_policy: AskForApproval::Never,
             approvals_reviewer: None,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,

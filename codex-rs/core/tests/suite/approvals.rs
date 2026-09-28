@@ -591,6 +591,7 @@ async fn submit_turn(
             approval_policy,
             approvals_reviewer: None,
             sandbox_policy,
+            model_provider: None,
             model: session_model,
             effort: None,
             summary: None,

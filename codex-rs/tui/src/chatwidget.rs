@@ -4623,7 +4623,7 @@ impl ChatWidget {
                 Self::model_ui_name(&config.model_provider_id, &header_model)
             )
         } else {
-            header_model.clone()
+            header_model
         };
 
         let current_cwd = Some(config.cwd.to_path_buf());
@@ -8215,7 +8215,7 @@ impl ChatWidget {
 
         if !other_presets.is_empty() {
             let all_models = other_presets;
-            let provider_id = target_provider_id.clone();
+            let provider_id = target_provider_id;
             let provider_id_for_name = provider_id.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::OpenAllModelsPopup {
@@ -8619,7 +8619,7 @@ impl ChatWidget {
                         effort: selected_effort,
                     });
             } else {
-                self.apply_model_and_effort(provider_id.clone(), selected_model, selected_effort);
+                self.apply_model_and_effort(provider_id, selected_model, selected_effort);
             }
             return;
         }

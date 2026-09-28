@@ -1653,21 +1653,21 @@ impl App {
     fn apply_turn_context_override_to_session(
         session: &mut ThreadSessionState,
         cwd: &Option<PathBuf>,
-        approval_policy: &Option<AskForApproval>,
-        approvals_reviewer: &Option<ApprovalsReviewer>,
+        approval_policy: Option<AskForApproval>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
         sandbox_policy: &Option<SandboxPolicy>,
         model_provider: &Option<String>,
         model: &Option<String>,
-        effort: &Option<Option<ReasoningEffortConfig>>,
-        service_tier: &Option<Option<codex_protocol::config_types::ServiceTier>>,
+        effort: Option<Option<ReasoningEffortConfig>>,
+        service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
     ) {
         if let Some(cwd) = cwd.clone() {
             session.cwd = cwd;
         }
-        if let Some(approval_policy) = approval_policy.clone() {
+        if let Some(approval_policy) = approval_policy {
             session.approval_policy = approval_policy;
         }
-        if let Some(approvals_reviewer) = approvals_reviewer.clone() {
+        if let Some(approvals_reviewer) = approvals_reviewer {
             session.approvals_reviewer = approvals_reviewer;
         }
         if let Some(sandbox_policy) = sandbox_policy.clone() {
@@ -1679,10 +1679,10 @@ impl App {
         if let Some(model) = model.clone() {
             session.model = model;
         }
-        if let Some(effort) = effort.clone() {
+        if let Some(effort) = effort {
             session.reasoning_effort = effort;
         }
-        if let Some(service_tier) = service_tier.clone() {
+        if let Some(service_tier) = service_tier {
             session.service_tier = service_tier;
         }
     }
@@ -1705,13 +1705,13 @@ impl App {
             Self::apply_turn_context_override_to_session(
                 session,
                 cwd,
-                approval_policy,
-                approvals_reviewer,
+                *approval_policy,
+                *approvals_reviewer,
                 sandbox_policy,
                 model_provider,
                 model,
-                effort,
-                service_tier,
+                *effort,
+                *service_tier,
             );
         }
 
@@ -1721,13 +1721,13 @@ impl App {
                 Self::apply_turn_context_override_to_session(
                     session,
                     cwd,
-                    approval_policy,
-                    approvals_reviewer,
+                    *approval_policy,
+                    *approvals_reviewer,
                     sandbox_policy,
                     model_provider,
                     model,
-                    effort,
-                    service_tier,
+                    *effort,
+                    *service_tier,
                 );
             }
         }
