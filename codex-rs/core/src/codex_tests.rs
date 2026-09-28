@@ -105,7 +105,7 @@ fn invalid_encrypted_content_detection_ignores_unrelated_errors() {
 }
 
 #[test]
-fn sanitize_rollout_item_for_native_resume_compat_redacts_reasoning_and_drops_compaction() {
+fn sanitize_rollout_item_for_native_resume_compat_redacts_reasoning_and_keeps_compaction() {
     let reasoning = ResponseItem::Reasoning {
         id: "rs_1".to_string(),
         summary: Vec::new(),
@@ -117,8 +117,7 @@ fn sanitize_rollout_item_for_native_resume_compat_redacts_reasoning_and_drops_co
     };
 
     let sanitized_reasoning =
-        sanitize_rollout_item_for_native_resume_compat(RolloutItem::ResponseItem(reasoning))
-            .expect("reasoning item should remain after sanitization");
+        sanitize_rollout_item_for_native_resume_compat(RolloutItem::ResponseItem(reasoning));
     assert_eq!(
         serde_json::to_value(sanitized_reasoning).expect("serialize sanitized reasoning rollout"),
         serde_json::to_value(RolloutItem::ResponseItem(ResponseItem::Reasoning {
@@ -130,9 +129,15 @@ fn sanitize_rollout_item_for_native_resume_compat_redacts_reasoning_and_drops_co
         .expect("serialize expected reasoning rollout")
     );
 
-    let sanitized_compaction =
-        sanitize_rollout_item_for_native_resume_compat(RolloutItem::ResponseItem(compacted));
-    assert!(sanitized_compaction.is_none());
+    // The compaction item is the only copy of a remote compaction summary; it must survive.
+    let sanitized_compaction = sanitize_rollout_item_for_native_resume_compat(
+        RolloutItem::ResponseItem(compacted.clone()),
+    );
+    assert_eq!(
+        serde_json::to_value(sanitized_compaction).expect("serialize sanitized compaction"),
+        serde_json::to_value(RolloutItem::ResponseItem(compacted))
+            .expect("serialize expected compaction")
+    );
 }
 
 #[test]
@@ -161,8 +166,7 @@ fn sanitize_rollout_item_for_native_resume_compat_sanitizes_compacted_replacemen
         ]),
     });
 
-    let sanitized = sanitize_rollout_item_for_native_resume_compat(compacted)
-        .expect("compacted rollout item should remain after sanitization");
+    let sanitized = sanitize_rollout_item_for_native_resume_compat(compacted);
     assert_eq!(
         serde_json::to_value(sanitized).expect("serialize sanitized compacted rollout"),
         serde_json::to_value(RolloutItem::Compacted(CompactedItem {
@@ -182,6 +186,9 @@ fn sanitize_rollout_item_for_native_resume_compat_sanitizes_compacted_replacemen
                     summary: Vec::new(),
                     content: None,
                     encrypted_content: None,
+                },
+                ResponseItem::Compaction {
+                    encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
                 },
             ]),
         }))
@@ -261,12 +268,23 @@ fn rollout_items_contains_incompatible_payloads_detects_incompatible_items() {
                 encrypted_content: None,
             }]),
         }),
-        RolloutItem::ResponseItem(ResponseItem::Compaction {
-            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        RolloutItem::ResponseItem(ResponseItem::Reasoning {
+            id: "rs_8".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("encrypted".to_string()),
         }),
     ];
     assert!(rollout_items_contains_incompatible_payloads(
         &compatible_checkpoint_then_late_incompatible_items
+    ));
+
+    // A remote compaction item alone does not force a rewrite: it is kept on disk.
+    let compaction_only_items = vec![RolloutItem::ResponseItem(ResponseItem::Compaction {
+        encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+    })];
+    assert!(!rollout_items_contains_incompatible_payloads(
+        &compaction_only_items
     ));
 }
 
@@ -275,23 +293,38 @@ async fn record_initial_history_resumed_rewrites_native_resume_compat_rollout() 
     let (session, _turn_context) = make_session_and_context().await;
     let session = Arc::new(session);
     let rollout_path = attach_rollout_recorder(&session).await;
+    let history = vec![
+        RolloutItem::ResponseItem(user_message("hello")),
+        RolloutItem::ResponseItem(ResponseItem::Reasoning {
+            id: "rs_checkpoint".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("encrypted".to_string()),
+        }),
+        RolloutItem::ResponseItem(ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        }),
+        RolloutItem::ResponseItem(assistant_message("world")),
+    ];
+    // Write the legacy payloads to disk unsanitized (bypassing `persist_rollout_items`),
+    // so the resume rewrite has something to rewrite.
+    let recorder = session
+        .services
+        .rollout
+        .lock()
+        .await
+        .clone()
+        .expect("rollout recorder attached");
+    recorder
+        .record_items(&history)
+        .await
+        .expect("write legacy rollout items");
+    session.flush_rollout().await;
 
     session
         .record_initial_history(InitialHistory::Resumed(ResumedHistory {
             conversation_id: ThreadId::new(),
-            history: vec![
-                RolloutItem::ResponseItem(user_message("hello")),
-                RolloutItem::ResponseItem(ResponseItem::Reasoning {
-                    id: "rs_checkpoint".to_string(),
-                    summary: Vec::new(),
-                    content: None,
-                    encrypted_content: Some("encrypted".to_string()),
-                }),
-                RolloutItem::ResponseItem(ResponseItem::Compaction {
-                    encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
-                }),
-                RolloutItem::ResponseItem(assistant_message("world")),
-            ],
+            history,
             rollout_path: rollout_path.clone(),
         }))
         .await;
@@ -311,10 +344,85 @@ async fn record_initial_history_resumed_rewrites_native_resume_compat_rollout() 
                 RolloutItem::ResponseItem(ResponseItem::Reasoning {
                     encrypted_content: Some(_),
                     ..
-                }) | RolloutItem::ResponseItem(ResponseItem::Compaction { .. })
+                })
             )
         }),
-        "rewritten rollout should not contain provider-bound encrypted payloads"
+        "rewritten rollout should not contain encrypted reasoning"
+    );
+    assert!(
+        resumed.history.iter().any(|item| matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::Reasoning {
+                encrypted_content: None,
+                ..
+            })
+        )),
+        "rewritten rollout should keep the reasoning item with its blob redacted"
+    );
+    assert!(
+        resumed.history.iter().any(|item| matches!(
+            item,
+            RolloutItem::ResponseItem(ResponseItem::Compaction { encrypted_content })
+                if encrypted_content == "ENCRYPTED_COMPACTION_SUMMARY"
+        )),
+        "rewritten rollout should keep the remote compaction summary"
+    );
+}
+
+#[tokio::test]
+async fn record_initial_history_resumed_keeps_compaction_only_for_remote_compaction_providers() {
+    let history = vec![
+        RolloutItem::ResponseItem(user_message("hello")),
+        RolloutItem::ResponseItem(ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        }),
+        RolloutItem::ResponseItem(assistant_message("world")),
+    ];
+    let has_compaction = |items: &[ResponseItem]| {
+        items
+            .iter()
+            .any(|item| matches!(item, ResponseItem::Compaction { .. }))
+    };
+
+    // OpenAI runs remote compaction, so it gets the summary back on resume.
+    let (openai_session, openai_turn_context) = make_session_and_context().await;
+    assert!(crate::compact::should_use_remote_compact_task(
+        &openai_turn_context.provider
+    ));
+    openai_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::new(),
+            history: history.clone(),
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+    assert!(has_compaction(
+        openai_session.clone_history().await.raw_items()
+    ));
+
+    // GitHub Copilot cannot verify the encrypted blob, so it is left out of its history.
+    let (copilot_session, _turn_context) = make_session_and_context().await;
+    {
+        let mut state = copilot_session.state.lock().await;
+        let provider = &mut state.session_configuration.provider;
+        provider.name = "GitHub Copilot".to_string();
+        provider.base_url = Some("https://api.individual.githubcopilot.com".to_string());
+    }
+    copilot_session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::new(),
+            history,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+    let copilot_history = copilot_session.clone_history().await;
+    assert!(!has_compaction(copilot_history.raw_items()));
+    assert!(
+        copilot_history
+            .raw_items()
+            .iter()
+            .any(|item| matches!(item, ResponseItem::Message { role, .. } if role == "assistant")),
+        "the rest of the resumed history should survive"
     );
 }
 
@@ -413,8 +521,10 @@ async fn migrate_legacy_rollout_files_for_native_resume_compat_rewrites_existing
     assert!(!rollout_items_contains_incompatible_payloads(
         &migrated_items
     ));
-    assert!(migrated_items.iter().all(|item| {
-        !matches!(
+    // Migration only redacts; it must not drop lines or the compaction summary.
+    assert_eq!(migrated_items.len(), 4);
+    assert!(migrated_items.iter().any(|item| {
+        matches!(
             item,
             RolloutItem::ResponseItem(ResponseItem::Compaction { .. })
         )

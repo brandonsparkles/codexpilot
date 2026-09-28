@@ -1446,7 +1446,7 @@ fn build_provider_responses_headers(
     headers
 }
 
-fn is_github_copilot_provider(provider: &ModelProviderInfo) -> bool {
+pub(crate) fn is_github_copilot_provider(provider: &ModelProviderInfo) -> bool {
     provider.name == GITHUB_COPILOT_PROVIDER_NAME
         || provider.base_url.as_deref().is_some_and(|base_url| {
             base_url.contains("githubcopilot.com") || base_url.contains("copilot-api.")

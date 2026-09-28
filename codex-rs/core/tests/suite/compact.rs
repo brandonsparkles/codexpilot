@@ -3227,6 +3227,95 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn github_copilot_pre_turn_compaction_counts_incoming_user_input() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+    let request_log = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_assistant_message("m1", FIRST_REPLY),
+                ev_completed_with_tokens("r1", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m2", "COPILOT_PRE_TURN_SUMMARY"),
+                ev_completed_with_tokens("r2", /*total_tokens*/ 100),
+            ]),
+            sse(vec![
+                ev_assistant_message("m3", FINAL_REPLY),
+                ev_completed_with_tokens("r3", /*total_tokens*/ 100),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut model_provider = non_openai_model_provider(&server);
+    model_provider.name = "GitHub Copilot".into();
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(100_000);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    // Reported usage (100 tokens) stays far below the limit, so only the projected
+    // incoming turn (~120k estimated tokens) can trigger pre-turn compaction.
+    let large_input = format!("COPILOT_LARGE_INPUT {}", "x".repeat(480_000));
+    for text in ["USER_ONE".to_string(), large_input.clone()] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text,
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .expect("submit user input");
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    let requests = request_log.requests();
+    assert_eq!(
+        requests.len(),
+        3,
+        "expected first turn, projected pre-turn compact, and follow-up requests"
+    );
+
+    let compact_body = requests[1].body_json().to_string();
+    assert!(
+        body_contains_text(&compact_body, SUMMARIZATION_PROMPT),
+        "projected pre-turn compaction request should include summarization prompt"
+    );
+    assert!(
+        !compact_body.contains("COPILOT_LARGE_INPUT"),
+        "incoming user input is recorded after pre-turn compaction"
+    );
+
+    let follow_up_body = requests[2].body_json().to_string();
+    assert!(
+        follow_up_body.contains("COPILOT_PRE_TURN_SUMMARY"),
+        "follow-up should carry the compaction summary"
+    );
+    assert!(
+        requests[2]
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == &large_input),
+        "follow-up should carry the incoming user input"
+    );
+    assert!(
+        follow_up_body.contains("<permissions instructions>"),
+        "follow-up should re-inject the turn context that compaction summarized away"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_pre_turn_compaction_context_window_exceeded() {
     skip_if_no_network!();
 

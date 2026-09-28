@@ -172,6 +172,7 @@ use uuid::Uuid;
 
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
+use crate::client::is_github_copilot_provider;
 use crate::client_common::Prompt;
 use crate::client_common::RequestInitiator;
 use crate::client_common::ResponseEvent;
@@ -2249,7 +2250,7 @@ impl Session {
                     rollout_items
                         .iter()
                         .cloned()
-                        .filter_map(sanitize_rollout_item_for_native_resume_compat)
+                        .map(sanitize_rollout_item_for_native_resume_compat)
                         .collect::<Vec<_>>()
                 } else {
                     rollout_items.clone()
@@ -2335,9 +2336,17 @@ impl Session {
         turn_context: &TurnContext,
         rollout_items: &[RolloutItem],
     ) -> Option<PreviousTurnSettings> {
-        let reconstructed_rollout = self
+        let mut reconstructed_rollout = self
             .reconstruct_history_from_rollout(turn_context, rollout_items)
             .await;
+        // `ResponseItem::Compaction` is an encrypted blob from the remote compaction
+        // endpoint. Keep it in the rollout, but leave it out of the history sent to a
+        // provider without remote compaction (e.g. GitHub Copilot): it cannot verify it.
+        if !should_use_remote_compact_task(&turn_context.provider) {
+            reconstructed_rollout
+                .history
+                .retain(|item| !matches!(item, ResponseItem::Compaction { .. }));
+        }
         let previous_turn_settings = reconstructed_rollout.previous_turn_settings.clone();
         self.replace_history(
             reconstructed_rollout.history,
@@ -4042,7 +4051,7 @@ impl Session {
         let sanitized_items: Vec<RolloutItem> = items
             .iter()
             .cloned()
-            .filter_map(sanitize_rollout_item_for_native_resume_compat)
+            .map(sanitize_rollout_item_for_native_resume_compat)
             .collect();
         if sanitized_items.is_empty() {
             return;
@@ -6063,6 +6072,17 @@ pub(crate) async fn run_turn(
 
     let model_info = turn_context.model_info.clone();
     let auto_compact_limit = model_info.auto_compact_token_limit().unwrap_or(i64::MAX);
+    // TODO(ccunningham): Pre-turn compaction runs before context updates and the
+    // new user message are recorded. Estimate pending incoming items (context
+    // diffs/full reinjection + user input) and trigger compaction preemptively
+    // when they would push the thread over the compaction threshold.
+    if run_pre_sampling_compact(&sess, &turn_context)
+        .await
+        .is_err()
+    {
+        error!("Failed to run pre-sampling compact");
+        return None;
+    }
 
     let skills_outcome = Some(turn_context.turn_skills.outcome.as_ref());
 
@@ -6162,19 +6182,32 @@ pub(crate) async fn run_turn(
 
     let plugin_items =
         build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
-    let mut projected_turn_items = Vec::with_capacity(1 + skill_items.len() + plugin_items.len());
-    if !input.is_empty() {
-        let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-        projected_turn_items.push(initial_input_for_turn.into());
-    }
-    projected_turn_items.extend(skill_items.iter().cloned());
-    projected_turn_items.extend(plugin_items.iter().cloned());
-    if run_pre_sampling_compact(&sess, &turn_context, &projected_turn_items)
-        .await
-        .is_err()
-    {
-        error!("Failed to run pre-sampling compact");
-        return None;
+    // GitHub Copilot answers an oversized request with a 408 request-body timeout
+    // instead of a context-window error, so on that provider also compact when the
+    // incoming turn (user input + skill/plugin injections) would cross the threshold.
+    if is_github_copilot_provider(&turn_context.provider) {
+        let mut projected_turn_items =
+            Vec::with_capacity(1 + skill_items.len() + plugin_items.len());
+        if !input.is_empty() {
+            let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+            projected_turn_items.push(initial_input_for_turn.into());
+        }
+        projected_turn_items.extend(skill_items.iter().cloned());
+        projected_turn_items.extend(plugin_items.iter().cloned());
+        match run_projected_pre_sampling_compact(&sess, &turn_context, &projected_turn_items).await
+        {
+            // Compaction cleared the reference context item and summarized the context
+            // recorded above; re-inject it so this turn keeps its instructions.
+            Ok(true) => {
+                sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+                    .await;
+            }
+            Ok(false) => {}
+            Err(_) => {
+                error!("Failed to run projected pre-sampling compact");
+                return None;
+            }
+        }
     }
     let mentioned_plugin_metadata = mentioned_plugins
         .iter()
@@ -6551,7 +6584,6 @@ pub(crate) async fn run_turn(
 async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    projected_turn_items: &[ResponseItem],
 ) -> CodexResult<()> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
     maybe_run_previous_model_inline_compact(
@@ -6560,19 +6592,40 @@ async fn run_pre_sampling_compact(
         total_usage_tokens_before_compaction,
     )
     .await?;
-    let projected_total_tokens =
-        match projected_prompt_token_count(sess, turn_context, projected_turn_items).await {
-            Some(tokens) => tokens,
-            None => sess.get_total_token_usage().await,
-        };
+    let total_usage_tokens = sess.get_total_token_usage().await;
     let auto_compact_limit = turn_context
         .model_info
         .auto_compact_token_limit()
         .unwrap_or(i64::MAX);
-    if projected_total_tokens >= auto_compact_limit {
+    // Compact if the total usage tokens are greater than the auto compact limit
+    if total_usage_tokens >= auto_compact_limit {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
     }
     Ok(())
+}
+
+/// GitHub Copilot-only pre-sampling check that also counts the incoming turn.
+///
+/// Returns `Ok(true)` when compaction ran, so the caller can re-inject the turn context.
+async fn run_projected_pre_sampling_compact(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    projected_turn_items: &[ResponseItem],
+) -> CodexResult<bool> {
+    let Some(projected_total_tokens) =
+        projected_prompt_token_count(sess, turn_context, projected_turn_items).await
+    else {
+        return Ok(false);
+    };
+    let auto_compact_limit = turn_context
+        .model_info
+        .auto_compact_token_limit()
+        .unwrap_or(i64::MAX);
+    if projected_total_tokens < auto_compact_limit {
+        return Ok(false);
+    }
+    run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
+    Ok(true)
 }
 
 async fn projected_prompt_token_count(
@@ -6811,37 +6864,37 @@ fn codex_apps_connector_id(tool: &McpToolInfo) -> Option<&str> {
     tool.connector_id.as_deref()
 }
 
-fn sanitize_response_item_for_native_resume_compat(mut item: ResponseItem) -> Option<ResponseItem> {
-    match &mut item {
-        ResponseItem::Reasoning {
-            encrypted_content, ..
-        } => {
-            *encrypted_content = None;
-            Some(item)
-        }
-        // Compaction payloads are provider-bound encrypted blobs that can become
-        // unverifiable when resumed by a different Codex binary/runtime.
-        ResponseItem::Compaction { .. } => None,
-        _ => Some(item),
+/// Redacts encrypted reasoning so the rollout never replays another provider's blobs.
+///
+/// `ResponseItem::Compaction` is kept: it is the only copy of a remote compaction summary.
+/// Providers that cannot verify it are handled when history is rebuilt from the rollout
+/// (see `Session::apply_rollout_reconstruction`).
+fn sanitize_response_item_for_native_resume_compat(mut item: ResponseItem) -> ResponseItem {
+    if let ResponseItem::Reasoning {
+        encrypted_content, ..
+    } = &mut item
+    {
+        *encrypted_content = None;
     }
+    item
 }
 
-fn sanitize_rollout_item_for_native_resume_compat(item: RolloutItem) -> Option<RolloutItem> {
+fn sanitize_rollout_item_for_native_resume_compat(item: RolloutItem) -> RolloutItem {
     match item {
         RolloutItem::ResponseItem(item) => {
-            sanitize_response_item_for_native_resume_compat(item).map(RolloutItem::ResponseItem)
+            RolloutItem::ResponseItem(sanitize_response_item_for_native_resume_compat(item))
         }
         RolloutItem::Compacted(mut compacted) => {
             compacted.replacement_history = compacted.replacement_history.map(|history| {
                 history
                     .into_iter()
-                    .filter_map(sanitize_response_item_for_native_resume_compat)
+                    .map(sanitize_response_item_for_native_resume_compat)
                     .collect()
             });
-            Some(RolloutItem::Compacted(compacted))
+            RolloutItem::Compacted(compacted)
         }
         RolloutItem::SessionMeta(_) | RolloutItem::TurnContext(_) | RolloutItem::EventMsg(_) => {
-            Some(item)
+            item
         }
     }
 }
@@ -6953,7 +7006,7 @@ fn rollout_items_contains_incompatible_payloads(items: &[RolloutItem]) -> bool {
 }
 
 fn response_item_requires_native_resume_compat(item: &ResponseItem) -> bool {
-    sanitize_response_item_for_native_resume_compat(item.clone()).as_ref() != Some(item)
+    sanitize_response_item_for_native_resume_compat(item.clone()) != *item
 }
 
 async fn rewrite_rollout_for_native_resume_compat(path: &Path) -> std::io::Result<bool> {
@@ -6974,11 +7027,9 @@ async fn rewrite_rollout_for_native_resume_compat(path: &Path) -> std::io::Resul
 
     let sanitized_lines: Vec<RolloutLine> = lines
         .into_iter()
-        .filter_map(|line| {
-            sanitize_rollout_item_for_native_resume_compat(line.item).map(|item| RolloutLine {
-                timestamp: line.timestamp,
-                item,
-            })
+        .map(|line| RolloutLine {
+            timestamp: line.timestamp,
+            item: sanitize_rollout_item_for_native_resume_compat(line.item),
         })
         .collect();
 

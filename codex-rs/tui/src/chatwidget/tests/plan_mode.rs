@@ -112,17 +112,21 @@ async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_sc
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateModel(model) if model == "gpt-5.1-codex-max"
-        )),
-        "expected model update event; events: {events:?}"
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected no scope prompt; events: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::StageModelSelection {
+                model,
+                effort: Some(_),
+                ..
+            } if model == "gpt-5.1-codex-max"
+        )),
+        "expected staged model and reasoning selection; events: {events:?}"
     );
 }
 
@@ -197,17 +201,21 @@ async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_promp
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
     assert!(
-        events.iter().any(|event| matches!(
-            event,
-            AppEvent::UpdateModel(model) if model == "gpt-5"
-        )),
-        "expected model update event; events: {events:?}"
+        !events
+            .iter()
+            .any(|event| matches!(event, AppEvent::OpenPlanReasoningScopePrompt { .. })),
+        "expected no scope prompt; events: {events:?}"
     );
     assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, AppEvent::UpdateReasoningEffort(Some(_)))),
-        "expected reasoning update event; events: {events:?}"
+        events.iter().any(|event| matches!(
+            event,
+            AppEvent::StageModelSelection {
+                model,
+                effort: Some(_),
+                ..
+            } if model == "gpt-5"
+        )),
+        "expected staged model and reasoning selection; events: {events:?}"
     );
 }
 

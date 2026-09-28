@@ -1735,9 +1735,14 @@ async fn single_reasoning_option_skips_selection() {
     }
 
     assert!(
-        events
-            .iter()
-            .any(|ev| matches!(ev, AppEvent::UpdateReasoningEffort(Some(effort)) if *effort == ReasoningEffortConfig::High)),
+        events.iter().any(|ev| matches!(
+            ev,
+            AppEvent::StageModelSelection {
+                model,
+                effort: Some(ReasoningEffortConfig::High),
+                ..
+            } if model == "model-with-single-reasoning"
+        )),
         "expected reasoning effort to be applied automatically; events: {events:?}"
     );
 }
