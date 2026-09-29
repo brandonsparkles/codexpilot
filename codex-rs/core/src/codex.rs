@@ -2288,8 +2288,16 @@ impl Session {
 
                 // Rewrite the rollout file in place so native Codex can resume the same
                 // session without replaying provider-bound encrypted payloads from the old file.
+                // Only rollouts under this fork's own home are ours to rewrite: a session found
+                // under the upstream `~/.codex` home (`session_lookup_roots`) belongs to native
+                // Codex, whose later resumes still need its encrypted reasoning. That case is
+                // already sanitized in memory above, so the native file is left untouched.
                 if !is_subagent
                     && needs_native_resume_compat
+                    && rollout_path_is_under_primary_root(
+                        self.codex_home().await.as_path(),
+                        resumed_history.rollout_path.as_path(),
+                    )
                     && let Err(err) = rewrite_rollout_for_native_resume_compat(
                         resumed_history.rollout_path.as_path(),
                     )
@@ -6634,8 +6642,14 @@ async fn projected_prompt_token_count(
     projected_turn_items: &[ResponseItem],
 ) -> Option<i64> {
     let mut projected_history = sess.clone_history().await;
-    let initial_context = sess.build_initial_context(turn_context).await;
-    projected_history.record_items(initial_context.iter(), turn_context.truncation_policy);
+    // The initial context is only still pending while the session has no reference context
+    // item. `run_turn` records the turn context before the Copilot-only projection runs, so
+    // the cloned history normally carries it already; appending it again would count one
+    // full initial context twice and compact before the limit is really reached.
+    if sess.reference_context_item().await.is_none() {
+        let initial_context = sess.build_initial_context(turn_context).await;
+        projected_history.record_items(initial_context.iter(), turn_context.truncation_policy);
+    }
     projected_history.record_items(projected_turn_items.iter(), turn_context.truncation_policy);
     projected_history.estimate_token_count(turn_context)
 }
@@ -7007,6 +7021,14 @@ fn rollout_items_contains_incompatible_payloads(items: &[RolloutItem]) -> bool {
 
 fn response_item_requires_native_resume_compat(item: &ResponseItem) -> bool {
     sanitize_response_item_for_native_resume_compat(item.clone()) != *item
+}
+
+/// True when `rollout_path` is stored under this fork's own home (`primary_root`), the only
+/// root the native-resume compatibility rewrite is allowed to modify. Rollouts under the
+/// upstream Codex home, or under no known root, belong to another tool's session store.
+fn rollout_path_is_under_primary_root(primary_root: &Path, rollout_path: &Path) -> bool {
+    crate::rollout::storage_root_for_rollout_path(primary_root, rollout_path).as_deref()
+        == Some(primary_root)
 }
 
 async fn rewrite_rollout_for_native_resume_compat(path: &Path) -> std::io::Result<bool> {

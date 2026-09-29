@@ -563,6 +563,159 @@ async fn projected_prompt_token_count_includes_pending_turn_items() {
     );
 }
 
+#[tokio::test]
+async fn projected_prompt_token_count_counts_initial_context_until_it_is_recorded() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+    assert!(session.reference_context_item().await.is_none());
+
+    let history_only = session
+        .clone_history()
+        .await
+        .estimate_token_count(&turn_context)
+        .expect("history estimate should be available");
+    let projected = projected_prompt_token_count(&session, &turn_context, &[])
+        .await
+        .expect("projected token estimate should be available");
+
+    assert!(
+        projected > history_only,
+        "the not-yet-recorded initial context must be projected: history_only={history_only}, projected={projected}"
+    );
+}
+
+#[tokio::test]
+async fn projected_prompt_token_count_does_not_double_count_recorded_initial_context() {
+    let (session, turn_context) = make_session_and_context().await;
+    let session = Arc::new(session);
+    let turn_context = Arc::new(turn_context);
+
+    // run_turn records the turn context before the Copilot-only projection runs.
+    session
+        .record_context_updates_and_set_reference_context_item(turn_context.as_ref())
+        .await;
+    assert!(session.reference_context_item().await.is_some());
+
+    let recorded = session
+        .clone_history()
+        .await
+        .estimate_token_count(&turn_context)
+        .expect("history estimate should be available");
+    assert!(
+        recorded > 0,
+        "the recorded initial context should cost tokens"
+    );
+    let projected = projected_prompt_token_count(&session, &turn_context, &[])
+        .await
+        .expect("projected token estimate should be available");
+
+    assert_eq!(
+        projected, recorded,
+        "an already-recorded initial context must not be counted a second time"
+    );
+}
+
+#[test]
+fn rollout_path_is_under_primary_root_only_for_the_forks_own_home() {
+    let primary_root = tempfile::tempdir().expect("create primary home");
+    let foreign_root = tempfile::tempdir().expect("create foreign home");
+    let rollout_name = "2026/04/15/rollout-x.jsonl";
+
+    assert!(rollout_path_is_under_primary_root(
+        primary_root.path(),
+        &primary_root.path().join("sessions").join(rollout_name),
+    ));
+    assert!(rollout_path_is_under_primary_root(
+        primary_root.path(),
+        &primary_root
+            .path()
+            .join("archived_sessions")
+            .join(rollout_name),
+    ));
+    // Under no known root: not ours to rewrite.
+    assert!(!rollout_path_is_under_primary_root(
+        primary_root.path(),
+        &foreign_root.path().join("sessions").join(rollout_name),
+    ));
+    // The upstream native Codex home is searched on resume but must never be rewritten.
+    if let Ok(upstream_root) = codex_utils_home_dir::find_upstream_codex_home()
+        && upstream_root != primary_root.path()
+        && upstream_root.exists()
+    {
+        assert!(!rollout_path_is_under_primary_root(
+            primary_root.path(),
+            &upstream_root.join("sessions").join(rollout_name),
+        ));
+    }
+}
+
+#[tokio::test]
+async fn record_initial_history_resumed_leaves_foreign_home_rollout_untouched() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let foreign_home = tempfile::tempdir().expect("create foreign home");
+    let rollout_dir = foreign_home.path().join("sessions/2026/04/15");
+    tokio::fs::create_dir_all(&rollout_dir)
+        .await
+        .expect("create foreign sessions dir");
+    let rollout_path = rollout_dir.join(format!("rollout-native-{}.jsonl", ThreadId::new()));
+
+    let history = vec![
+        RolloutItem::ResponseItem(user_message("hello")),
+        RolloutItem::ResponseItem(ResponseItem::Reasoning {
+            id: "rs_native".to_string(),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("encrypted".to_string()),
+        }),
+        RolloutItem::ResponseItem(assistant_message("world")),
+    ];
+    let mut contents = String::new();
+    for item in &history {
+        let line = RolloutLine {
+            timestamp: "2026-04-15T00:00:00Z".to_string(),
+            item: item.clone(),
+        };
+        contents.push_str(&serde_json::to_string(&line).expect("serialize rollout line"));
+        contents.push('\n');
+    }
+    tokio::fs::write(&rollout_path, &contents)
+        .await
+        .expect("write foreign rollout");
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::new(),
+            history,
+            rollout_path: rollout_path.clone(),
+        }))
+        .await;
+
+    let after = tokio::fs::read_to_string(&rollout_path)
+        .await
+        .expect("read foreign rollout");
+    assert_eq!(
+        after, contents,
+        "a rollout outside this fork's home must keep its encrypted reasoning bytes"
+    );
+    // The resumed in-memory history is still sanitized for this fork's providers.
+    assert!(
+        session
+            .clone_history()
+            .await
+            .raw_items()
+            .iter()
+            .all(|item| !matches!(
+                item,
+                ResponseItem::Reasoning {
+                    encrypted_content: Some(_),
+                    ..
+                }
+            )),
+        "resumed in-memory history should not carry encrypted reasoning"
+    );
+}
+
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
