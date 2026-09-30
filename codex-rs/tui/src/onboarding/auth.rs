@@ -1423,6 +1423,80 @@ mod tests {
         assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
     }
 
+    fn github_copilot_device_code_state() -> GitHubCopilotDeviceCodeState {
+        GitHubCopilotDeviceCodeState {
+            user_code: Some("ABCD-1234".to_string()),
+            verification_uri: Some("https://github.com/login/device".to_string()),
+            cancel: None,
+        }
+    }
+
+    #[test]
+    fn github_copilot_device_code_renders_snapshot() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+        let state = github_copilot_device_code_state();
+
+        let area = Rect::new(0, 0, 60, 10);
+        let mut buf = Buffer::empty(area);
+        widget.render_github_copilot_device_code(area, &mut buf, &state);
+
+        // The verification URL is wrapped in OSC 8 escapes per cell, which a
+        // terminal emulator backend would mangle; strip them to snapshot the
+        // visible text.
+        let open = format!("\x1B]8;;{}\x07", state.verification_uri.as_deref().unwrap());
+        let close = "\x1B]8;;\x07";
+        let rendered = (area.top()..area.bottom())
+            .map(|y| {
+                let row: String = (area.left()..area.right())
+                    .map(|x| {
+                        let sym = buf[(x, y)].symbol();
+                        sym.strip_prefix(open.as_str())
+                            .and_then(|rest| rest.strip_suffix(close))
+                            .unwrap_or(sym)
+                            .to_string()
+                    })
+                    .collect();
+                row.trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn github_copilot_device_code_line_is_bold_cyan() {
+        // The text snapshot cannot pin color, so assert the one-time code's style
+        // directly: it is the value users copy, and must stay visually distinct.
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (widget, _tmp) = runtime.block_on(widget_forced_chatgpt());
+        let state = github_copilot_device_code_state();
+        let area = Rect::new(0, 0, 60, 10);
+        let mut buf = Buffer::empty(area);
+
+        widget.render_github_copilot_device_code(area, &mut buf, &state);
+
+        let code = state.user_code.as_deref().unwrap();
+        let row = (0..area.height)
+            .find(|&y| {
+                let text: String = (0..area.width).map(|x| buf[(x, y)].symbol()).collect();
+                text.contains(code)
+            })
+            .expect("one-time code row should be rendered");
+        let start = (0..area.width)
+            .find(|&x| buf[(x, row)].symbol() == &code[..1])
+            .expect("code start column");
+        for (offset, _) in code.chars().enumerate() {
+            let cell = &buf[(start + offset as u16, row)];
+            assert_eq!(cell.fg, Color::Cyan, "code cell {offset} should be cyan");
+            assert!(
+                cell.modifier.contains(Modifier::BOLD),
+                "code cell {offset} should be bold"
+            );
+        }
+    }
+
     #[test]
     fn mark_url_hyperlink_wraps_cyan_underlined_cells() {
         let url = "https://example.com";

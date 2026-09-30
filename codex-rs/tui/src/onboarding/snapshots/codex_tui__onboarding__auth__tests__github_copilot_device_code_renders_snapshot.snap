@@ -1,0 +1,13 @@
+---
+source: tui/src/onboarding/auth.rs
+expression: rendered
+---
+> Sign in with GitHub Copilot
+
+  Open this URL in your browser:
+  https://github.com/login/device
+
+  Enter this one-time code:
+  ABCD-1234
+
+  Press Esc to cancel

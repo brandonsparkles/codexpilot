@@ -1978,11 +1978,15 @@ async fn codexpilot_resume_lists_upstream_threads_and_writes_back_to_upstream_ro
     let ThreadResumeResponse { thread, .. } = to_response::<ThreadResumeResponse>(resume_resp)?;
     assert_eq!(thread.id, upstream_thread_id);
     assert_eq!(thread.model_provider, "upstream-provider");
+    // The server canonicalizes CODEX_HOME (find_home_from_env), so on macOS the
+    // default TMPDIR (/var/folders/...) comes back as /private/var/folders/...;
+    // compare against the canonical root rather than the raw TempDir path.
+    let canonical_upstream_codex_home = upstream_codex_home.canonicalize()?;
     assert!(
         thread
             .path
             .as_ref()
-            .is_some_and(|path| path.starts_with(&upstream_codex_home)),
+            .is_some_and(|path| path.starts_with(&canonical_upstream_codex_home)),
         "resumed upstream thread should keep its upstream rollout path: {:?}",
         thread.path
     );

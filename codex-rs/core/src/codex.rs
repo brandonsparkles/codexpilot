@@ -7122,11 +7122,9 @@ pub(crate) fn is_invalid_encrypted_content_error(err: &CodexErr) -> bool {
 }
 
 fn is_github_copilot_request_body_timeout(err: &CodexErr, provider: &ModelProviderInfo) -> bool {
-    let is_github_copilot_provider = provider.name == "GitHub Copilot"
-        || provider.base_url.as_deref().is_some_and(|base_url| {
-            base_url.contains("githubcopilot.com") || base_url.contains("copilot-api.")
-        });
-    if !is_github_copilot_provider {
+    // Same predicate that gates projected pre-sampling compaction and Copilot
+    // headers, so the 408 recovery can never drift from the proactive path.
+    if !is_github_copilot_provider(provider) {
         return false;
     }
 
