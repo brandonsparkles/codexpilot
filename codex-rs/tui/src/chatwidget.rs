@@ -8539,20 +8539,6 @@ impl ChatWidget {
         });
     }
 
-    pub(crate) fn open_models_for_provider(&mut self, provider_id: &str) {
-        let presets: Vec<ModelPreset> = match self.model_catalog.try_list_models() {
-            Ok(models) => models,
-            Err(_) => {
-                self.add_info_message(
-                    "Models are being updated; please try /model again in a moment.".to_string(),
-                    /*hint*/ None,
-                );
-                return;
-            }
-        };
-        self.open_model_popup_with_presets_for_provider(presets, Some(provider_id));
-    }
-
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         self.open_reasoning_popup_for_provider(None, preset);
