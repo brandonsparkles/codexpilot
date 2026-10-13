@@ -8104,6 +8104,11 @@ impl ChatWidget {
         Some(trimmed.to_string())
     }
 
+    // Test-only convenience wrapper: every non-test caller goes through
+    // open_model_popup_with_presets_for_provider.
+    // SPK-SHORTCUT: kept for the chatwidget tests instead of rewriting their
+    // call sites; delete once tests call the _for_provider form directly.
+    #[cfg(test)]
     pub(crate) fn open_model_popup_with_presets(&mut self, presets: Vec<ModelPreset>) {
         self.open_model_popup_with_presets_for_provider(presets, None);
     }
@@ -8266,10 +8271,6 @@ impl ChatWidget {
             "codex-auto-thorough" => 2,
             _ => 4,
         }
-    }
-
-    pub(crate) fn open_all_models_popup(&mut self, presets: Vec<ModelPreset>) {
-        self.open_all_models_popup_for_provider(presets, None);
     }
 
     pub(crate) fn open_all_models_popup_for_provider(
@@ -8540,6 +8541,11 @@ impl ChatWidget {
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
+    // Test-only convenience wrapper: every non-test caller goes through
+    // open_reasoning_popup_for_provider.
+    // SPK-SHORTCUT: kept for the chatwidget tests instead of rewriting their
+    // call sites; delete once tests call the _for_provider form directly.
+    #[cfg(test)]
     pub(crate) fn open_reasoning_popup(&mut self, preset: ModelPreset) {
         self.open_reasoning_popup_for_provider(None, preset);
     }
