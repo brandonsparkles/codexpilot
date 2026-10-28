@@ -30,7 +30,11 @@ Repository = "https://github.com/openai/codex"
 Issues = "https://github.com/openai/codex/issues"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff>=0.11"]
+# ruff is pinned exactly: update_sdk_artifacts.py formats generated output with `ruff-format`
+# and tests/test_contract_generation.py asserts byte equality, so a formatter bump must be a
+# deliberate change that regenerates generated/v2_all.py, generated/notification_registry.py
+# and api.py in the same commit. 0.16.8 and 0.17.3 produced byte-identical output (2026-10-28).
+dev = ["pytest>=8.0", "datamodel-code-generator==0.31.2", "ruff==0.17.3"]
 
 [tool.hatch.build]
 exclude = [
