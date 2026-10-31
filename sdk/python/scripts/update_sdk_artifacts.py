@@ -306,16 +306,6 @@ def _variant_collision_key(
     return "|".join(parts)
 
 
-def _set_discriminator_titles(props: dict[str, Any], owner: str) -> None:
-    for key in DISCRIMINATOR_KEYS:
-        prop = props.get(key)
-        if not isinstance(prop, dict):
-            continue
-        if _string_literal(prop) is None or "title" in prop:
-            continue
-        prop["title"] = f"{owner}{_to_pascal_case(key)}"
-
-
 def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
     seen = {
         variant["title"]
@@ -325,6 +315,14 @@ def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
 
     for variant in variants:
         if not isinstance(variant, dict):
+            continue
+
+        literals = _enum_literals(variant)
+        if literals is not None and len(literals) == 1:
+            # Preserve scalar singleton union branches, such as summary "none".
+            # A naming title makes newer generators wrap these in RootModel.
+            variant.pop("title", None)
+            _annotate_schema(variant, base)
             continue
 
         variant_name = variant.get("title")
@@ -347,11 +345,6 @@ def _annotate_variant_list(variants: list[Any], base: str | None) -> None:
             seen.add(generated_name)
             variant_name = generated_name
 
-        if isinstance(variant_name, str):
-            props = variant.get("properties")
-            if isinstance(props, dict):
-                _set_discriminator_titles(props, variant_name)
-
         _annotate_schema(variant, base)
 
 
@@ -364,10 +357,14 @@ def _annotate_schema(value: Any, base: str | None = None) -> None:
     if not isinstance(value, dict):
         return
 
-    owner = value.get("title")
     props = value.get("properties")
-    if isinstance(owner, str) and isinstance(props, dict):
-        _set_discriminator_titles(props, owner)
+    if isinstance(props, dict):
+        for key in DISCRIMINATOR_KEYS:
+            prop = props.get(key)
+            if isinstance(prop, dict) and _string_literal(prop) is not None:
+                # A title on an inline literal becomes a named RootModel in
+                # newer generators. Discriminators must remain scalar strings.
+                prop.pop("title", None)
 
     one_of = value.get("oneOf")
     if isinstance(one_of, list):
@@ -431,11 +428,22 @@ def generate_v2_all() -> None:
                 "--output-model-type",
                 "pydantic_v2.BaseModel",
                 "--target-python-version",
-                "3.11",
+                "3.10",
+                # Preserve existing Enum and scalar Literal APIs. Newer generators
+                # otherwise emit StrEnum and named RootModel literal wrappers.
+                "--no-use-specialized-enum",
                 "--use-standard-collections",
                 "--enum-field-as-literal",
                 "one",
                 "--field-constraints",
+                # Rust's unsigned format labels are not JSON Schema formats.
+                # Keep their existing integer constraints and scalar representation.
+                "--type-mappings",
+                "integer+uint=integer",
+                "integer+uint8=integer",
+                "integer+uint16=integer",
+                "integer+uint32=integer",
+                "integer+uint64=integer",
                 "--use-default-kwarg",
                 "--snake-case-field",
                 "--allow-population-by-field-name",

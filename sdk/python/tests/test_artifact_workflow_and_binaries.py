@@ -138,7 +138,7 @@ def test_python_codegen_schema_annotation_adds_stable_variant_titles() -> None:
     ]
     assert reasoning_summary_titles == [
         "ReasoningSummaryValue",
-        "NoneReasoningSummary",
+        None,
     ]
 
 
@@ -148,6 +148,34 @@ def test_generate_v2_all_uses_titles_for_generated_names() -> None:
     assert "--use-annotated" in source
     assert "--formatters" in source
     assert "ruff-format" in source
+
+
+def test_generated_wire_discriminators_remain_scalars_and_enums_keep_existing_semantics() -> None:
+    from codex_app_server.generated.v2_all import ApprovalsReviewer, InitializeRequest
+
+    payload = {
+        "id": 1,
+        "method": "initialize",
+        "params": {"clientInfo": {"name": "test-client", "version": "1.0"}},
+    }
+    request = InitializeRequest.model_validate(payload)
+    assert request.method == "initialize"
+    assert isinstance(request.method, str)
+    assert request.model_dump(mode="json", by_alias=True, exclude_none=True) == payload
+    assert not isinstance(ApprovalsReviewer.user, str)
+
+
+def test_generated_reasoning_summary_preserves_scalar_and_enum_variants() -> None:
+    from codex_app_server.generated.v2_all import ReasoningSummary, ReasoningSummaryValue
+
+    none = ReasoningSummary.model_validate("none")
+    assert type(none.root) is str
+    assert none.root == "none"
+    assert none.model_dump(mode="json") == "none"
+    for member in ReasoningSummaryValue:
+        value = ReasoningSummary.model_validate(member.value)
+        assert value.root is member
+        assert value.model_dump(mode="json") == member.value
 
 
 def test_runtime_package_template_has_no_checked_in_binaries() -> None:
